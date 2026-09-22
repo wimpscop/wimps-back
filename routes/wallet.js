@@ -67,13 +67,16 @@ async function refundPaystackReference(reference) {
 
 function validatePayment(paymentData, expectedAmount) {
   const expected = Number(expectedAmount);
-  const paidAmount = Number(paymentData.amount || 0) / 100;
-  const currency = String(paymentData.currency || "").toUpperCase();
+  const paidAmount = Number(paymentData?.amount || 0) / 100;
+  const currency = String(paymentData?.currency || "").toUpperCase();
 
   if (!Number.isFinite(expected) || expected <= 0) return "Invalid expected payment amount";
   if (!Number.isFinite(paidAmount) || paidAmount <= 0) return "Invalid payment amount";
   if (currency && currency !== "GHS") return "Payment currency mismatch";
-  if (Math.abs(paidAmount - expected) > 0.01) return "Amount mismatch";
+
+  const expectedCents = Math.round(expected * 100);
+  const paidCents = Math.round(paidAmount * 100);
+  if (Math.abs(paidCents - expectedCents) > 1) return "Amount mismatch";
   return null;
 }
 
@@ -243,7 +246,8 @@ router.post("/buy", async (req, res) => {
       if (reference) {
         const verification = await verifyPaystackReference(reference);
         if (!verification.verified) return res.status(400).json({ msg: verification.msg || "Payment verification failed" });
-        const paymentError = validatePayment(verification.paymentData, requiredAmount);
+        const expectedAmount = Number(incoming.amount ?? requiredAmount);
+        const paymentError = validatePayment(verification.paymentData, expectedAmount);
         if (paymentError) return res.status(400).json({ msg: paymentError });
         const duplicate = readTransactions().find((item) => item.reference === reference);
         if (duplicate) return res.json({ msg: "Payment already processed", balance: user.balance || 0, data: duplicate });
@@ -336,7 +340,8 @@ router.post("/buy", async (req, res) => {
           return res.status(400).json({ msg: verification.msg || "Payment verification failed" });
         }
 
-        const paymentError = validatePayment(verification.paymentData, requiredAmount);
+        const expectedAmount = Number(incoming.amount ?? requiredAmount);
+        const paymentError = validatePayment(verification.paymentData, expectedAmount);
         if (paymentError) return res.status(400).json({ msg: paymentError });
 
         const existing = await Transaction.findOne({ reference });
