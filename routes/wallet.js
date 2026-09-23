@@ -462,7 +462,7 @@ router.post("/buy", async (req, res) => {
           result?.deliveryStatus || result?.order_status ||
           result?.data?.status || result?.status || result?.order?.status || "pending"
         ).toLowerCase();
-        const confirmedDeliveryStatuses = ["completed", "delivered", "sent", "delivered_successfully", "success", "successful"];
+        const confirmedDeliveryStatuses = ["completed", "delivered", "sent", "delivered_successfully"];
         tx.status = confirmedDeliveryStatuses.includes(providerStatus)
           ? "completed"
           : providerStatus === "failed" ? "failed" : "pending";
