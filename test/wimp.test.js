@@ -7,7 +7,7 @@ const wimpRouter = require('../routes/wimp');
 const adminWimpRouter = require('../routes/adminWimp');
 const { ensureWallet, getWallet, awardCompletedPurchase, getLedger, spendWallet, adjustWallet } = require('../services/wimp');
 const { readWallets, writeWallets, readLedger, writeLedger, readSettings, writeSettings } = require('../utils/wimpStore');
-const { readUsers, writeUsers } = require('../utils/localStore');
+const { readUsers, writeUsers, readTransactions, writeTransactions } = require('../utils/localStore');
 
 const dataDir = path.join(__dirname, '..', 'data');
 const files = ['wimp-wallets.json', 'wimp-ledger.json', 'wimp-settings.json', 'users.json'];
@@ -85,6 +85,30 @@ test('admin WIMP route rejects missing admin authentication', async () => {
   try {
     const response = await fetch(`http://127.0.0.1:${server.address().port}/api/admin/wimp/settings`);
     assert.equal(response.status, 401);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    if (previous === undefined) delete process.env.ADMIN_API_TOKEN;
+    else process.env.ADMIN_API_TOKEN = previous;
+  }
+});
+
+test('admin completion awards WIMP exactly once', async () => {
+  const userId = `wimp-complete-${Date.now()}`;
+  writeUsers([{ id: userId, email: 'complete@example.com', fullname: 'Complete Test' }]);
+  writeTransactions([{ _id: 'purchase-complete-1', email: 'complete@example.com', type: 'purchase', status: 'pending', bundle: '1GB test', reference: 'purchase-complete-1' }]);
+  const previous = process.env.ADMIN_API_TOKEN;
+  process.env.ADMIN_API_TOKEN = 'wimp-admin-test-token-0123456789';
+  const app = express();
+  app.locals.dbReady = false;
+  app.use(express.json());
+  app.use('/api/admin', require('../routes/admin'));
+  const server = await new Promise((resolve) => { const value = app.listen(0, '127.0.0.1', () => resolve(value)); });
+  try {
+    const url = `http://127.0.0.1:${server.address().port}/api/admin/orders/purchase-complete-1/status`;
+    const headers = { 'X-Admin-Token': process.env.ADMIN_API_TOKEN, 'Content-Type': 'application/json' };
+    assert.equal((await fetch(url, { method: 'PATCH', headers, body: JSON.stringify({ status: 'completed' }) })).status, 200);
+    assert.equal((await fetch(url, { method: 'PATCH', headers, body: JSON.stringify({ status: 'completed' }) })).status, 200);
+    assert.equal(readLedger().filter((entry) => entry.type === 'earn' && entry.referenceId === 'purchase-complete-1').length, 1);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     if (previous === undefined) delete process.env.ADMIN_API_TOKEN;
