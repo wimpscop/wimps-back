@@ -7,6 +7,7 @@ const TransactionSchema = new mongoose.Schema({
   network: String,
   provider: String,
   amount: Number,
+  paymentAmount: Number,
   referralDiscount: Number,
   providerCost: Number,
   providerFee: Number,

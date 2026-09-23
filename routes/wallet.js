@@ -261,7 +261,7 @@ router.post("/buy", async (req, res) => {
         const paid = getVerifiedPaymentAmount(verification.paymentData);
         if (paid.error) return res.status(400).json({ msg: paid.error });
         chargedAmount = paid.amount;
-        appliedReferralDiscount = Math.min(referralDiscount, Math.max(0, grossAmount - chargedAmount));
+        appliedReferralDiscount = referralDiscount;
         const duplicate = readTransactions().find((item) => item.reference === reference);
         if (duplicate) return res.json({ msg: "Payment already processed", balance: user.balance || 0, data: duplicate });
       } else {
@@ -271,7 +271,7 @@ router.post("/buy", async (req, res) => {
 
       const transaction = {
         _id: createId(), email, type: "purchase", network: plan.network, provider: plan.provider,
-        amount: chargedAmount, referralDiscount: appliedReferralDiscount, bundle: bundle || formatBundleLabel(plan),
+        amount: requiredAmount, paymentAmount: reference ? chargedAmount : undefined, referralDiscount: appliedReferralDiscount, bundle: bundle || formatBundleLabel(plan),
         phone, paymentMethod: reference ? "paystack" : "wallet",
         status: reference ? "pending" : "completed", reference: reference || createId(),
         date: new Date().toISOString()
@@ -359,17 +359,17 @@ router.post("/buy", async (req, res) => {
         const paid = getVerifiedPaymentAmount(verification.paymentData);
         if (paid.error) return res.status(400).json({ msg: paid.error });
         chargedAmount = paid.amount;
-        appliedReferralDiscount = Math.min(referralDiscount, Math.max(0, grossAmount - chargedAmount));
-        if (chargedAmount + 0.01 < providerCost) {
+        appliedReferralDiscount = referralDiscount;
+        if (chargedAmount + 0.01 < requiredAmount) {
           const failedTransaction = await Transaction.create({
             email, type: "purchase", network: plan.network, provider: plan.provider,
-            amount: chargedAmount, providerCost, referralDiscount: 0, providerFee, smsFee,
+            amount: requiredAmount, paymentAmount: chargedAmount, providerCost, referralDiscount: 0, providerFee, smsFee,
             expectedProfit: 0, bundle: bundle || formatBundleLabel(plan), phone,
             paymentMethod: "paystack", status: "failed", reference, providerRequestId: requestId
           });
           const refunded = await refundPaystackReference(reference);
           return res.status(502).json({
-            msg: refunded ? "Payment was below the provider cost and has been refunded." : "Payment was below the provider cost; support must complete the refund.",
+            msg: refunded ? "Payment was below the bundle price and has been refunded." : "Payment was below the bundle price; support must complete the refund.",
             data: failedTransaction
           });
         }
@@ -395,7 +395,8 @@ router.post("/buy", async (req, res) => {
         type: "purchase",
         network: plan.network,
         provider: plan.provider,
-        amount: chargedAmount,
+        amount: requiredAmount,
+        paymentAmount: reference ? chargedAmount : undefined,
         providerCost: Number(plan.price || providerCost),
         referralDiscount: appliedReferralDiscount,
         providerFee,
@@ -465,7 +466,7 @@ router.post("/buy", async (req, res) => {
         tx.status = confirmedDeliveryStatuses.includes(providerStatus)
           ? "completed"
           : providerStatus === "failed" ? "failed" : "pending";
-        tx.actualProfit = Number((chargedAmount - Number(tx.providerCost || providerCost) - Number(tx.providerFee || providerFee) - Number(tx.smsFee || smsFee)).toFixed(2));
+        tx.actualProfit = Number((requiredAmount - Number(tx.providerCost || providerCost) - Number(tx.providerFee || providerFee) - Number(tx.smsFee || smsFee)).toFixed(2));
         if (tx.status === "completed") tx.deliveredAt = new Date();
         // Keep the Paystack reference stable so a callback retry cannot deliver twice.
         if (!reference) tx.reference = result?.order?.request_id || requestId;
