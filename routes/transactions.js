@@ -17,7 +17,7 @@ router.get("/:email", async (req, res) => {
       try {
         const result = await getOrderStatus(tx.providerRequestId);
         const status = String(result?.data?.delivery_status || result?.data?.fulfillment_status || result?.data?.status || result?.status || result?.order?.status || "pending").toLowerCase();
-        if (["completed", "delivered", "sent", "delivered_successfully", "success"].includes(status)) {
+        if (["completed", "delivered", "sent", "delivered_successfully", "success", "successful"].includes(status)) {
           tx.status = "completed";
           tx.deliveredAt = tx.deliveredAt || new Date();
           await tx.save();

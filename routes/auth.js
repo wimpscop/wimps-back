@@ -88,7 +88,10 @@ router.get("/session", requireUser, (req, res) => {
 // ===== REGISTER =====
 router.post("/register", async (req, res) => {
   try {
-    const { fullname, email, password, referralCode } = req.body;
+    const fullname = String(req.body?.fullname || "").trim();
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    const password = String(req.body?.password || "");
+    const referralCode = String(req.body?.referralCode || "").trim();
 
     if (!fullname || !email || !password) {
       return res.status(400).json({ msg: "All fields required" });
@@ -96,7 +99,7 @@ router.post("/register", async (req, res) => {
 
     if (isFallback(req)) {
       const users = readUsers();
-      const exists = users.find((item) => item.email.toLowerCase() === email.toLowerCase());
+      const exists = users.find((item) => String(item.email || "").toLowerCase() === email);
       if (exists) return res.status(400).json({ msg: "User already exists" });
 
       const user = {
@@ -111,9 +114,9 @@ router.post("/register", async (req, res) => {
         referralCredits: 0,
         createdAt: new Date().toISOString()
       };
-      const referrer = users.find((item) => String(item.referralCode || "").toUpperCase() === String(referralCode || "").trim().toUpperCase());
-        const reward = await getReferralReward(req);
-      if (referrer && referrer.email !== user.email) {
+      const referrer = users.find((item) => String(item.referralCode || "").toUpperCase() === referralCode.toUpperCase());
+      const reward = await getReferralReward(req);
+      if (referrer && String(referrer.email || "").toLowerCase() !== user.email) {
         user.referredBy = referrer.referralCode;
         referrer.referralCount = Number(referrer.referralCount || 0) + 1;
         referrer.referralCredits = Number((Number(referrer.referralCredits || 0) + reward).toFixed(2));
@@ -140,10 +143,10 @@ router.post("/register", async (req, res) => {
     });
 
     const referrer = referralCode
-      ? await User.findOne({ referralCode: String(referralCode).trim().toUpperCase() })
+      ? await User.findOne({ referralCode: referralCode.toUpperCase() })
       : null;
-    if (referrer && referrer.email.toLowerCase() !== email.toLowerCase()) {
-        const reward = await getReferralReward(req);
+    if (referrer && referrer.email.toLowerCase() !== email) {
+      const reward = await getReferralReward(req);
       user.referredBy = referrer.referralCode;
       referrer.referralCount += 1;
       referrer.referralCredits = Number((Number(referrer.referralCredits || 0) + reward).toFixed(2));
@@ -182,7 +185,9 @@ router.post("/forgot-password", async (req, res) => {
         resetPasswordExpires: expires
       });
     }
-    const resetUrl = `${String(process.env.FRONTEND_URL || "").replace(/\/$/, "")}/login-page.html?reset=${encodeURIComponent(token)}&email=${encodeURIComponent(email)}`;
+    const frontendUrl = String(process.env.FRONTEND_URL || "").replace(/\/$/, "");
+    if (!frontendUrl) return res.status(503).json({ msg: "Password reset is not configured. Please contact support." });
+    const resetUrl = `${frontendUrl}/login-page.html?reset=${encodeURIComponent(token)}&email=${encodeURIComponent(email)}`;
     const exists = isFallback(req) ? readUsers().some((item) => String(item.email).toLowerCase() === email) : await User.exists({ email });
     if (exists) await sendPasswordResetEmail({ email, resetUrl });
     return res.json({ msg: "If that email is registered, reset instructions have been sent." });

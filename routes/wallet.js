@@ -65,8 +65,9 @@ async function refundPaystackReference(reference) {
   }
 }
 
-function validatePayment(paymentData, expectedAmount) {
+function validatePayment(paymentData, expectedAmount, maximumAmount = expectedAmount) {
   const expected = Number(expectedAmount);
+  const maximum = Number(maximumAmount);
   const paidAmount = Number(paymentData?.amount || 0) / 100;
   const currency = String(paymentData?.currency || "").toUpperCase();
 
@@ -76,7 +77,8 @@ function validatePayment(paymentData, expectedAmount) {
 
   const expectedCents = Math.round(expected * 100);
   const paidCents = Math.round(paidAmount * 100);
-  if (Math.abs(paidCents - expectedCents) > 1) return "Amount mismatch";
+  const maximumCents = Math.round(maximum * 100);
+  if (paidCents < expectedCents - 1 || paidCents > maximumCents + 1) return "Amount mismatch";
   return null;
 }
 
@@ -246,8 +248,7 @@ router.post("/buy", async (req, res) => {
       if (reference) {
         const verification = await verifyPaystackReference(reference);
         if (!verification.verified) return res.status(400).json({ msg: verification.msg || "Payment verification failed" });
-        const expectedAmount = Number(incoming.amount ?? requiredAmount);
-        const paymentError = validatePayment(verification.paymentData, expectedAmount);
+        const paymentError = validatePayment(verification.paymentData, requiredAmount, grossAmount);
         if (paymentError) return res.status(400).json({ msg: paymentError });
         const duplicate = readTransactions().find((item) => item.reference === reference);
         if (duplicate) return res.json({ msg: "Payment already processed", balance: user.balance || 0, data: duplicate });
@@ -340,8 +341,7 @@ router.post("/buy", async (req, res) => {
           return res.status(400).json({ msg: verification.msg || "Payment verification failed" });
         }
 
-        const expectedAmount = Number(incoming.amount ?? requiredAmount);
-        const paymentError = validatePayment(verification.paymentData, expectedAmount);
+        const paymentError = validatePayment(verification.paymentData, requiredAmount, grossAmount);
         if (paymentError) return res.status(400).json({ msg: paymentError });
 
         const existing = await Transaction.findOne({ reference });
@@ -431,7 +431,7 @@ router.post("/buy", async (req, res) => {
           result?.deliveryStatus || result?.order_status ||
           result?.data?.status || result?.status || result?.order?.status || "pending"
         ).toLowerCase();
-        const confirmedDeliveryStatuses = ["completed", "delivered", "sent", "delivered_successfully"];
+        const confirmedDeliveryStatuses = ["completed", "delivered", "sent", "delivered_successfully", "success", "successful"];
         tx.status = confirmedDeliveryStatuses.includes(providerStatus)
           ? "completed"
           : providerStatus === "failed" ? "failed" : "pending";
@@ -441,6 +441,11 @@ router.post("/buy", async (req, res) => {
         if (!reference) tx.reference = result?.order?.request_id || requestId;
         tx.providerRequestId = result?.order?.request_id || result?.data?.request_id || result?.request_id || requestId;
         await tx.save();
+
+        if (referralDiscount > 0 && tx.status !== "failed") {
+          user.referralCredits = Number(Math.max(0, Number(user.referralCredits || 0) - referralDiscount).toFixed(2));
+          await user.save();
+        }
 
         let smsSent = false;
         if (tx.status === "completed") {

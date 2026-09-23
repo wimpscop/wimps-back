@@ -5,9 +5,9 @@ const path = require('node:path');
 
 test('shop pages should not render wallet balance, user, or deposit card blocks', () => {
   const pageFiles = [
-    'front-end/mtn.html',
-    'front-end/atgo.html',
-    'front-end/telecel.html'
+    'wimps/mtn.html',
+    'wimps/atgo.html',
+    'wimps/telecel.html'
   ];
 
   for (const page of pageFiles) {
@@ -20,7 +20,7 @@ test('shop pages should not render wallet balance, user, or deposit card blocks'
 });
 
 test('home page dashboard state must guard accountStats for anonymous users', () => {
-  const helperFile = path.join(__dirname, '..', '..', 'front-end', 'home-page.js');
+  const helperFile = path.join(__dirname, '..', '..', 'wimps', 'home-page.js');
   const source = fs.readFileSync(helperFile, 'utf8');
 
   assert.ok(source.includes("localStorage.removeItem('accountStats')"), 'anonymous users must clear stale accountStats from localStorage');
@@ -28,7 +28,7 @@ test('home page dashboard state must guard accountStats for anonymous users', ()
 });
 
 test('shared page scripts must avoid top-level duplicate globals', () => {
-  const files = ['front-end/mtn.js', 'front-end/atgo.js', 'front-end/login-page.js'];
+  const files = ['wimps/mtn.js', 'wimps/atgo.js', 'wimps/login-page.js'];
 
   for (const file of files) {
     const source = fs.readFileSync(path.join(__dirname, '..', '..', file), 'utf8');
