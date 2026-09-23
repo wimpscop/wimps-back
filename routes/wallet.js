@@ -442,6 +442,18 @@ router.post("/buy", async (req, res) => {
         tx.providerRequestId = result?.order?.request_id || result?.data?.request_id || result?.request_id || requestId;
         await tx.save();
 
+        if (tx.status === "failed") {
+          const refunded = reference ? await refundPaystackReference(reference) : true;
+          return res.status(502).json({
+            msg: reference
+              ? refunded
+                ? "Bundle delivery failed. Your Paystack payment has been refunded."
+                : "Bundle delivery failed. The refund could not be completed automatically; support will review it."
+              : "Bundle delivery failed",
+            data: tx
+          });
+        }
+
         if (referralDiscount > 0 && tx.status !== "failed") {
           user.referralCredits = Number(Math.max(0, Number(user.referralCredits || 0) - referralDiscount).toFixed(2));
           await user.save();

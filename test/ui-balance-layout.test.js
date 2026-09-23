@@ -67,12 +67,14 @@ test('completed purchases include SMS notification and delivery fee wiring', () 
 });
 
 test('bundle handling fee is fixed per network', () => {
-  const { calculateSellingPrice } = require('../services/resellerxpress');
-  const oneGb = calculateSellingPrice(4, 1);
-  const hundredGb = calculateSellingPrice(400, 100);
-  assert.equal(oneGb.expectedProfit, 1, 'one GB should target one cedi profit');
-  assert.equal(hundredGb.expectedProfit, 1, 'handling fee should not scale with bundle size');
-  assert.equal(hundredGb.sellingPrice, 401, 'bundle amount should remain the provider price plus handling fee');
+  const { calculateSellingPrice, configurePricingRules } = require('../services/resellerxpress');
+  configurePricingRules({ handlingFees: { test: 0.5 } });
+  const oneGb = calculateSellingPrice(4, 1, "test");
+  const twoGb = calculateSellingPrice(7, 2, "test");
+  const threeGb = calculateSellingPrice(10, 3, "test");
+  assert.equal(oneGb.expectedProfit, 0.5, 'one GB should use one handling fee');
+  assert.equal(twoGb.expectedProfit, 1, 'two GB should use two handling fees');
+  assert.equal(threeGb.sellingPrice, 11.5, 'three GB should add three handling fees');
 });
 
 test('resellerxpress plans should return a visible fallback list when upstream plans are empty', async () => {

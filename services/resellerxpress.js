@@ -96,8 +96,10 @@ function getFallbackPlans(network) {
 
 function calculateSellingPrice(totalCost, volumeGb, network) {
   const cost = Number(totalCost);
+  const volume = Number(volumeGb);
   if (!Number.isFinite(cost) || cost <= 0) return null;
-  const fee = Number(handlingFees[normalizeNetwork(network)] ?? 1);
+  const feePerGb = Number(handlingFees[normalizeNetwork(network)] ?? 1);
+  const fee = feePerGb * (Number.isFinite(volume) && volume > 0 ? volume : 1);
   return { sellingPrice: Number((cost + fee).toFixed(2)), expectedProfit: fee };
 }
 

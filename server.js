@@ -4,6 +4,8 @@ const cors = require("cors");
 const fs = require("fs");
 const path = require("path");
 const { MongoMemoryServer } = require("mongodb-memory-server");
+const AdminSetting = require("./models/AdminSetting");
+const { readData } = require("./utils/fileDb");
 require("dotenv").config();
 
 const app = express();
@@ -94,6 +96,20 @@ app.use("/api/remadata", require("./routes/remadata"));
 app.use("/api/sendcomms", require("./routes/sendcomms"));
 app.use("/api/support", require("./routes/support"));
 app.use("/api/admin", require("./routes/admin"));
+
+app.get("/api/config/version", async (req, res) => {
+  try {
+    if (app.locals.dbReady === false) {
+      const settings = readData("admin-settings.json") || [];
+      const latest = settings.reduce((value, item) => Math.max(value, new Date(item.updatedAt || 0).getTime()), 0);
+      return res.json({ version: latest || 0 });
+    }
+    const latest = await AdminSetting.findOne().sort({ updatedAt: -1 }).select("updatedAt").lean();
+    return res.json({ version: latest?.updatedAt ? new Date(latest.updatedAt).getTime() : 0 });
+  } catch (error) {
+    return res.json({ version: 0 });
+  }
+});
 
 // ===== TEST ROUTE =====
 app.get("/", (req, res) => {
