@@ -82,6 +82,14 @@ function validatePayment(paymentData, expectedAmount, maximumAmount = expectedAm
   return null;
 }
 
+function getVerifiedPaymentAmount(paymentData) {
+  const paidAmount = Number(paymentData?.amount || 0) / 100;
+  const currency = String(paymentData?.currency || "").toUpperCase();
+  if (!Number.isFinite(paidAmount) || paidAmount <= 0) return { error: "Invalid payment amount" };
+  if (currency && currency !== "GHS") return { error: "Payment currency mismatch" };
+  return { amount: Number(paidAmount.toFixed(2)) };
+}
+
 function formatBundleLabel(plan) {
   const volumeGb = Number(plan?.volumeGb);
   if (!Number.isFinite(volumeGb) || volumeGb <= 0) return plan?.name || "Data bundle";
@@ -244,12 +252,16 @@ router.post("/buy", async (req, res) => {
       const referralDiscount = Math.min(Number(user.referralCredits || 0), grossAmount);
       const requiredAmount = Number((grossAmount - referralDiscount).toFixed(2));
       if (!requiredAmount) return res.status(400).json({ msg: "Invalid bundle amount" });
+      let chargedAmount = requiredAmount;
+      let appliedReferralDiscount = referralDiscount;
 
       if (reference) {
         const verification = await verifyPaystackReference(reference);
         if (!verification.verified) return res.status(400).json({ msg: verification.msg || "Payment verification failed" });
-        const paymentError = validatePayment(verification.paymentData, requiredAmount, grossAmount);
-        if (paymentError) return res.status(400).json({ msg: paymentError });
+        const paid = getVerifiedPaymentAmount(verification.paymentData);
+        if (paid.error) return res.status(400).json({ msg: paid.error });
+        chargedAmount = paid.amount;
+        appliedReferralDiscount = Math.min(referralDiscount, Math.max(0, grossAmount - chargedAmount));
         const duplicate = readTransactions().find((item) => item.reference === reference);
         if (duplicate) return res.json({ msg: "Payment already processed", balance: user.balance || 0, data: duplicate });
       } else {
@@ -259,14 +271,14 @@ router.post("/buy", async (req, res) => {
 
       const transaction = {
         _id: createId(), email, type: "purchase", network: plan.network, provider: plan.provider,
-        amount: requiredAmount, referralDiscount, bundle: bundle || formatBundleLabel(plan),
+        amount: chargedAmount, referralDiscount: appliedReferralDiscount, bundle: bundle || formatBundleLabel(plan),
         phone, paymentMethod: reference ? "paystack" : "wallet",
         status: reference ? "pending" : "completed", reference: reference || createId(),
         date: new Date().toISOString()
       };
       const transactions = readTransactions();
       transactions.push(transaction);
-      user.referralCredits = Number((Number(user.referralCredits || 0) - referralDiscount).toFixed(2));
+      user.referralCredits = Number((Number(user.referralCredits || 0) - appliedReferralDiscount).toFixed(2));
       writeUsers(users);
       writeTransactions(transactions);
       return res.json({
@@ -334,6 +346,9 @@ router.post("/buy", async (req, res) => {
         });
       }
 
+      let chargedAmount = requiredAmount;
+      let appliedReferralDiscount = referralDiscount;
+
       if (reference) {
         const verification = await verifyPaystackReference(reference);
 
@@ -341,8 +356,23 @@ router.post("/buy", async (req, res) => {
           return res.status(400).json({ msg: verification.msg || "Payment verification failed" });
         }
 
-        const paymentError = validatePayment(verification.paymentData, requiredAmount, grossAmount);
-        if (paymentError) return res.status(400).json({ msg: paymentError });
+        const paid = getVerifiedPaymentAmount(verification.paymentData);
+        if (paid.error) return res.status(400).json({ msg: paid.error });
+        chargedAmount = paid.amount;
+        appliedReferralDiscount = Math.min(referralDiscount, Math.max(0, grossAmount - chargedAmount));
+        if (chargedAmount + 0.01 < providerCost) {
+          const failedTransaction = await Transaction.create({
+            email, type: "purchase", network: plan.network, provider: plan.provider,
+            amount: chargedAmount, providerCost, referralDiscount: 0, providerFee, smsFee,
+            expectedProfit: 0, bundle: bundle || formatBundleLabel(plan), phone,
+            paymentMethod: "paystack", status: "failed", reference, providerRequestId: requestId
+          });
+          const refunded = await refundPaystackReference(reference);
+          return res.status(502).json({
+            msg: refunded ? "Payment was below the provider cost and has been refunded." : "Payment was below the provider cost; support must complete the refund.",
+            data: failedTransaction
+          });
+        }
 
         const existing = await Transaction.findOne({ reference });
         if (existing) {
@@ -365,9 +395,9 @@ router.post("/buy", async (req, res) => {
         type: "purchase",
         network: plan.network,
         provider: plan.provider,
-        amount: requiredAmount,
+        amount: chargedAmount,
         providerCost: Number(plan.price || providerCost),
-        referralDiscount,
+        referralDiscount: appliedReferralDiscount,
         providerFee,
         smsFee,
         expectedProfit,
@@ -435,7 +465,7 @@ router.post("/buy", async (req, res) => {
         tx.status = confirmedDeliveryStatuses.includes(providerStatus)
           ? "completed"
           : providerStatus === "failed" ? "failed" : "pending";
-        tx.actualProfit = Number((requiredAmount - Number(tx.providerCost || providerCost) - Number(tx.providerFee || providerFee) - Number(tx.smsFee || smsFee)).toFixed(2));
+        tx.actualProfit = Number((chargedAmount - Number(tx.providerCost || providerCost) - Number(tx.providerFee || providerFee) - Number(tx.smsFee || smsFee)).toFixed(2));
         if (tx.status === "completed") tx.deliveredAt = new Date();
         // Keep the Paystack reference stable so a callback retry cannot deliver twice.
         if (!reference) tx.reference = result?.order?.request_id || requestId;
@@ -454,8 +484,8 @@ router.post("/buy", async (req, res) => {
           });
         }
 
-        if (referralDiscount > 0 && tx.status !== "failed") {
-          user.referralCredits = Number(Math.max(0, Number(user.referralCredits || 0) - referralDiscount).toFixed(2));
+        if (appliedReferralDiscount > 0 && tx.status !== "failed") {
+          user.referralCredits = Number(Math.max(0, Number(user.referralCredits || 0) - appliedReferralDiscount).toFixed(2));
           await user.save();
         }
 
