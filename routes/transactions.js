@@ -13,7 +13,7 @@ router.get("/:email", async (req, res) => {
       return res.status(403).json({ msg: "You can only access your own transactions" });
     }
     const txs = await Transaction.find({ email: req.params.email });
-    await Promise.all(txs.filter((tx) => tx.type === "purchase" && tx.status === "pending" && tx.provider === "resellerxpress" && tx.providerRequestId).map(async (tx) => {
+    await Promise.all(txs.filter((tx) => tx.type === "purchase" && !["failed", "refunded"].includes(tx.status) && tx.provider === "resellerxpress" && tx.providerRequestId).map(async (tx) => {
       try {
         const result = await getOrderStatus(tx.providerRequestId);
         const status = String(result?.data?.delivery_status || result?.data?.fulfillment_status || result?.data?.status || result?.status || result?.order?.status || "pending").toLowerCase();
@@ -23,6 +23,10 @@ router.get("/:email", async (req, res) => {
           await tx.save();
         } else if (["failed", "cancelled", "canceled"].includes(status)) {
           tx.status = "failed";
+          await tx.save();
+        } else if (tx.status !== "pending") {
+          tx.status = "pending";
+          tx.deliveredAt = null;
           await tx.save();
         }
       } catch (error) {
