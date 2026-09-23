@@ -3,6 +3,7 @@ const router = express.Router();
 const Transaction = require("../models/Transaction");
 const { requireUser } = require("../utils/auth");
 const { getOrderStatus } = require("../services/resellerxpress");
+const { awardCompletedPurchase, reverseCompletedPurchaseReward } = require("../services/wimp");
 
 router.use(requireUser);
 
@@ -21,9 +22,17 @@ router.get("/:email", async (req, res) => {
           tx.status = "completed";
           tx.deliveredAt = tx.deliveredAt || new Date();
           await tx.save();
+          await awardCompletedPurchase(req, {
+            userId: req.user.sub,
+            referenceId: String(tx._id || tx.reference),
+            description: `Reward for completed purchase ${tx.bundle || tx.reference}`
+          });
         } else if (["failed", "cancelled", "canceled"].includes(status)) {
           tx.status = "failed";
           await tx.save();
+          try {
+            await reverseCompletedPurchaseReward(req, { userId: req.user.sub, referenceId: String(tx._id || tx.reference), description: `Reward reversal for failed purchase ${tx.bundle || tx.reference}` });
+          } catch (rewardError) { console.error("WIMP REFUND ERROR:", rewardError.message); }
         } else if (tx.status !== "pending") {
           tx.status = "pending";
           tx.deliveredAt = null;

@@ -11,6 +11,7 @@ const datamart = require("../services/datamart");
 const { sendCustomerEmail } = require("../services/resend");
 const { readData, writeData } = require("../utils/fileDb");
 const { isFallback, readUsers, writeUsers, readTransactions, writeTransactions } = require("../utils/localStore");
+const { reverseCompletedPurchaseReward } = require("../services/wimp");
 
 const router = express.Router();
 
@@ -152,6 +153,10 @@ router.patch("/orders/:id/status", async (req, res) => {
       { $set: { status, ...(status === "completed" ? { deliveredAt: new Date() } : {}) } },
       { new: true }).lean();
     if (!order) return res.status(404).json({ msg: "Order not found" });
+    if (status === "refunded" && order.type === "purchase") {
+      const user = await User.findOne({ email: order.email }).lean();
+      if (user) await reverseCompletedPurchaseReward(req, { userId: String(user._id), referenceId: String(order._id || order.reference), description: `Reward reversal for refunded purchase ${order.bundle || order.reference}` });
+    }
     return res.json({ data: order });
   } catch (error) {
     const transactions = readTransactions();
@@ -160,6 +165,10 @@ router.patch("/orders/:id/status", async (req, res) => {
     order.status = status;
     if (status === "completed") order.deliveredAt = new Date().toISOString();
     writeTransactions(transactions);
+    if (status === "refunded" && order.type === "purchase") {
+      const user = readUsers().find((item) => String(item.email || "").toLowerCase() === String(order.email || "").toLowerCase());
+      if (user) await reverseCompletedPurchaseReward(req, { userId: String(user.id), referenceId: String(order._id || order.reference), description: `Reward reversal for refunded purchase ${order.bundle || order.reference}` });
+    }
     return res.json({ data: order });
   }
 });

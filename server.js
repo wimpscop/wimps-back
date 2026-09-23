@@ -96,6 +96,8 @@ app.use("/api/remadata", require("./routes/remadata"));
 app.use("/api/sendcomms", require("./routes/sendcomms"));
 app.use("/api/support", require("./routes/support"));
 app.use("/api/admin", require("./routes/admin"));
+app.use("/api/wimp", require("./routes/wimp"));
+app.use("/api/admin/wimp", require("./routes/adminWimp"));
 
 app.get("/api/config/version", async (req, res) => {
   try {

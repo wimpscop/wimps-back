@@ -9,6 +9,7 @@ const { createId, isFallback, readUsers, writeUsers, readTransactions, writeTran
 const { requireUser } = require("../utils/auth");
 const { normalizePhone, validatePhone } = require("../utils/phoneValidation");
 const { sendSms } = require("../services/sendcomms");
+const { awardCompletedPurchase } = require("../services/wimp");
 
 router.use(requireUser);
 
@@ -483,6 +484,18 @@ router.post("/buy", async (req, res) => {
               : "Bundle delivery failed",
             data: tx
           });
+        }
+
+        if (tx.status === "completed") {
+          try {
+            await awardCompletedPurchase(req, {
+              userId: req.user.sub,
+              referenceId: String(tx._id || tx.reference),
+              description: `Reward for completed purchase ${tx.bundle || tx.reference}`
+            });
+          } catch (rewardError) {
+            console.error("WIMP REWARD ERROR:", rewardError.message);
+          }
         }
 
         if (appliedReferralDiscount > 0 && tx.status !== "failed") {

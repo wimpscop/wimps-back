@@ -5,6 +5,8 @@
   "main": "server.js",
   "scripts": {
     "test": "node --test",
+    "migrate:wimp": "node scripts/migrate-wimp-rewards.js",
+    "rollback:wimp": "node scripts/migrate-wimp-rewards.js --rollback",
     "start": "node server.js",
     "dev": "nodemon server.js"
   },

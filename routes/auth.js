@@ -8,6 +8,7 @@ const { createAuthToken, requireUser } = require("../utils/auth");
 const AdminSetting = require("../models/AdminSetting");
 const { readData } = require("../utils/fileDb");
 const { sendPasswordResetEmail } = require("../services/resend");
+const { ensureWallet } = require("../services/wimp");
 
 async function getDataPurgeNotice(req) {
   try {
@@ -124,6 +125,7 @@ router.post("/register", async (req, res) => {
       }
       users.push(user);
       writeUsers(users);
+      await ensureWallet(req, user.id);
       return res.json({ msg: "Registration successful", user: publicUser(user) });
     }
 
@@ -155,6 +157,7 @@ router.post("/register", async (req, res) => {
     }
 
     await user.save();
+    await ensureWallet(req, String(user._id));
 
     res.json({ msg: "Registration successful", user: publicUser(user) });
 
@@ -299,6 +302,7 @@ router.post("/google", async (req, res) => {
         user.googleId = profile.sub;
       }
       writeUsers(users);
+      await ensureWallet(req, user.id);
     } else {
       user = await User.findOne({ email });
       if (!user) {
@@ -307,6 +311,7 @@ router.post("/google", async (req, res) => {
         user.googleId = profile.sub;
         await user.save();
       }
+      await ensureWallet(req, String(user._id));
     }
 
     res.json({ msg: "Google sign-in successful", user: publicUser(user) });
