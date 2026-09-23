@@ -229,6 +229,31 @@ router.get("/customers", async (req, res) => {
   }
 });
 
+router.delete("/customers/:email", async (req, res) => {
+  const email = String(req.params.email || "").trim().toLowerCase();
+  if (!email || !email.includes("@")) return res.status(400).json({ msg: "A valid customer email is required" });
+
+  if (isFallback(req)) {
+    const users = readUsers();
+    const remainingUsers = users.filter((user) => String(user.email || "").toLowerCase() !== email);
+    if (remainingUsers.length === users.length) return res.status(404).json({ msg: "Customer not found" });
+    const existingTransactions = readTransactions();
+    const transactions = existingTransactions.filter((transaction) => String(transaction.email || "").toLowerCase() !== email);
+    writeUsers(remainingUsers);
+    writeTransactions(transactions);
+    return res.json({ msg: "Customer deleted", deletedTransactions: existingTransactions.length - transactions.length });
+  }
+
+  try {
+    const userResult = await User.deleteOne({ email });
+    if (!userResult.deletedCount) return res.status(404).json({ msg: "Customer not found" });
+    const transactionResult = await Transaction.deleteMany({ email });
+    return res.json({ msg: "Customer deleted", deletedTransactions: transactionResult.deletedCount || 0 });
+  } catch (error) {
+    return res.status(500).json({ msg: "Unable to delete customer" });
+  }
+});
+
 router.post("/email", async (req, res) => {
   const subject = String(req.body?.subject || "").trim();
   const message = String(req.body?.message || "").trim();
