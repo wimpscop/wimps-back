@@ -11,7 +11,9 @@ const DEFAULT_SETTINGS = {
   rewardPerCompletedPurchaseUnits: 10,
   redemptionEnabled: true,
   maximumDiscountUnits: 1000,
-  minimumOrderAmount: 0
+  minimumOrderAmount: 0,
+  autoCompleteEnabled: true,
+  autoCompleteHours: 5
 };
 
 function toUnits(value) {

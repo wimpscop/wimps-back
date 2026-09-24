@@ -6,6 +6,7 @@ const path = require("path");
 const { MongoMemoryServer } = require("mongodb-memory-server");
 const AdminSetting = require("./models/AdminSetting");
 const { readData } = require("./utils/fileDb");
+const { startAutoCompleteJob } = require("./services/autoComplete");
 require("dotenv").config();
 
 const app = express();
@@ -122,6 +123,7 @@ app.get("/", (req, res) => {
 async function startServer() {
   try {
     await startDatabase();
+    startAutoCompleteJob(app);
     app.listen(PORT, () => {
       console.log(`Server running on http://localhost:${PORT}`);
     });

@@ -7,6 +7,7 @@ const wimpRouter = require('../routes/wimp');
 const adminWimpRouter = require('../routes/adminWimp');
 const { ensureWallet, getWallet, awardCompletedPurchase, getLedger, spendWallet, adjustWallet } = require('../services/wimp');
 const { readWallets, writeWallets, readLedger, writeLedger, readSettings, writeSettings } = require('../utils/wimpStore');
+const { runAutoCompleteSweep } = require('../services/autoComplete');
 const { readUsers, writeUsers, readTransactions, writeTransactions } = require('../utils/localStore');
 
 const dataDir = path.join(__dirname, '..', 'data');
@@ -114,4 +115,15 @@ test('admin completion awards WIMP exactly once', async () => {
     if (previous === undefined) delete process.env.ADMIN_API_TOKEN;
     else process.env.ADMIN_API_TOKEN = previous;
   }
+});
+
+test('auto-complete sweep completes old pending purchases and awards once', async () => {
+  const userId = `wimp-auto-${Date.now()}`;
+  writeUsers([{ id: userId, email: 'auto@example.com', fullname: 'Auto Test' }]);
+  writeTransactions([{ _id: 'purchase-auto-1', email: 'auto@example.com', type: 'purchase', status: 'pending', bundle: '1GB test', reference: 'purchase-auto-1', date: new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString() }]);
+  writeSettings([{ key: 'autoCompleteEnabled', value: true }, { key: 'autoCompleteHours', value: 5 }]);
+  const result = await runAutoCompleteSweep({ locals: { dbReady: false } });
+  assert.equal(result.completed, 1);
+  assert.equal(readTransactions()[0].status, 'completed');
+  assert.equal(readLedger().filter((entry) => entry.type === 'earn').length, 1);
 });

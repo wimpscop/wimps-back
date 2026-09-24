@@ -67,6 +67,12 @@ router.put("/settings", async (req, res) => {
     if (units === null) return res.status(400).json({ msg: "Invalid maximum discount" });
     values.maximumDiscountUnits = units;
   }
+  if (input.autoCompleteEnabled !== undefined) values.autoCompleteEnabled = Boolean(input.autoCompleteEnabled);
+  if (input.autoCompleteHours !== undefined) {
+    const hours = Number(input.autoCompleteHours);
+    if (!Number.isFinite(hours) || hours < 1 || hours > 168) return res.status(400).json({ msg: "Auto-complete hours must be between 1 and 168" });
+    values.autoCompleteHours = hours;
+  }
   if (!Object.keys(values).length) return res.status(400).json({ msg: "No valid WIMP settings supplied" });
   try { return res.json({ settings: await saveSettings(req, values, req.adminId) }); }
   catch (error) { return res.status(500).json({ msg: "Unable to save WIMP settings" }); }
