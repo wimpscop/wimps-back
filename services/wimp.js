@@ -44,19 +44,31 @@ async function getSettings(req) {
 async function ensureWallet(req, userId, session) {
   if (isFallback(req)) {
     const wallets = readWallets();
+    const ledger = readLedger().filter((item) => String(item.userId) === String(userId)).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     let wallet = wallets.find((item) => String(item.userId) === String(userId));
     if (!wallet) {
-      wallet = { id: crypto.randomUUID(), userId: String(userId), balanceUnits: 0, version: 0, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+      wallet = { id: crypto.randomUUID(), userId: String(userId), balanceUnits: Number(ledger[0]?.balanceAfterUnits || 0), version: 0, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
       wallets.push(wallet);
+      writeWallets(wallets);
+    } else if (ledger[0] && Number(ledger[0].balanceAfterUnits || 0) > Number(wallet.balanceUnits || 0)) {
+      wallet.balanceUnits = Number(ledger[0].balanceAfterUnits);
+      wallet.updatedAt = new Date().toISOString();
       writeWallets(wallets);
     }
     return wallet;
   }
-  return WimpWallet.findOneAndUpdate(
+  const wallet = await WimpWallet.findOneAndUpdate(
     { userId: String(userId) },
     { $setOnInsert: { userId: String(userId), balanceUnits: 0, version: 0, createdAt: new Date() }, $set: { updatedAt: new Date() } },
     { upsert: true, new: true, session }
   );
+  const latest = await WimpLedger.findOne({ userId: String(userId) }).sort({ createdAt: -1 }).session(session).lean();
+  if (latest && Number(latest.balanceAfterUnits || 0) > Number(wallet.balanceUnits || 0)) {
+    wallet.balanceUnits = Number(latest.balanceAfterUnits);
+    wallet.updatedAt = new Date();
+    await wallet.save({ session });
+  }
+  return wallet;
 }
 
 async function getWallet(req, userId) {

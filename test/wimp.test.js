@@ -45,6 +45,13 @@ test('creates a zero-balance wallet and awards a completed purchase once', async
   assert.equal((await getLedger(req, userId)).length, 1);
 });
 
+test('repairs a missing wallet from the latest ledger balance', async () => {
+  const req = fallbackRequest();
+  const userId = `wimp-repair-${Date.now()}`;
+  writeLedger([{ id: 'ledger-repair-1', userId, walletId: 'wallet-repair-1', type: 'earn', amountUnits: 450, balanceBeforeUnits: 0, balanceAfterUnits: 450, referenceId: 'purchase-repair-1', description: 'Repair test', createdAt: new Date().toISOString() }]);
+  assert.equal((await getWallet(req, userId)).balanceUnits, 450);
+});
+
 test('spending is idempotent and cannot make the wallet negative', async () => {
   const req = fallbackRequest();
   const userId = `wimp-spend-${Date.now()}`;
