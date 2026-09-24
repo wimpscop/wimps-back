@@ -255,7 +255,7 @@ router.post("/buy", async (req, res) => {
       const wimpDiscountUnits = await calculateDiscount(req, { userId: user.id, requestedUnits: requestedWimpUnits, maximumUnits: toUnits(Math.max(0, grossAmount - referralDiscount)) });
       const wimpDiscount = wimpDiscountUnits / 100;
       const requiredAmount = Number((grossAmount - referralDiscount - wimpDiscount).toFixed(2));
-      if (!requiredAmount) return res.status(400).json({ msg: "Invalid bundle amount" });
+      if (requiredAmount < 0) return res.status(400).json({ msg: "Invalid bundle amount" });
       let chargedAmount = requiredAmount;
       let appliedReferralDiscount = referralDiscount;
 
@@ -341,14 +341,14 @@ router.post("/buy", async (req, res) => {
       const providerCost = Number(plan.cost || plan.total || 0) * safeQuantity;
       const referralDiscount = Math.min(Number(user.referralCredits || 0), Math.max(0, grossAmount - providerCost));
       const requestedWimpUnits = Number.isInteger(Number(incoming.wimpUnits)) ? Number(incoming.wimpUnits) : toUnits(incoming.wimpAmount);
-      const wimpDiscountUnits = await calculateDiscount(req, { userId: String(user._id), requestedUnits: requestedWimpUnits, maximumUnits: toUnits(Math.max(0, grossAmount - referralDiscount - providerCost)) });
+      const wimpDiscountUnits = await calculateDiscount(req, { userId: String(user._id), requestedUnits: requestedWimpUnits, maximumUnits: toUnits(Math.max(0, grossAmount - referralDiscount)) });
       const wimpDiscount = wimpDiscountUnits / 100;
       const requiredAmount = Number((grossAmount - referralDiscount - wimpDiscount).toFixed(2));
       const providerFee = Number(plan.fee || 0) * safeQuantity;
       const smsFee = Number(plan.smsFee || 0) * safeQuantity;
       const expectedProfit = Number(plan.expectedProfit || 0) * safeQuantity;
 
-      if (!requiredAmount || plan.available === false || requiredAmount < providerCost) {
+      if (requiredAmount < 0 || plan.available === false || (wimpDiscountUnits === 0 && requiredAmount < providerCost)) {
         return res.status(400).json({
           msg: "No valid amount could be derived for this ResellerXpress plan"
         });
