@@ -9,7 +9,7 @@ const { createId, isFallback, readUsers, writeUsers, readTransactions, writeTran
 const { requireUser } = require("../utils/auth");
 const { normalizePhone, validatePhone } = require("../utils/phoneValidation");
 const { sendSms } = require("../services/sendcomms");
-const { awardCompletedPurchase } = require("../services/wimp");
+const { awardCompletedPurchase, calculateDiscount, spendWallet, adjustWallet, toUnits } = require("../services/wimp");
 
 router.use(requireUser);
 
@@ -251,7 +251,10 @@ router.post("/buy", async (req, res) => {
       const quantity = Math.max(Number(incoming.quantity || 1), 1);
       const grossAmount = sellingPrice * quantity;
       const referralDiscount = Math.min(Number(user.referralCredits || 0), grossAmount);
-      const requiredAmount = Number((grossAmount - referralDiscount).toFixed(2));
+      const requestedWimpUnits = Number.isInteger(Number(incoming.wimpUnits)) ? Number(incoming.wimpUnits) : toUnits(incoming.wimpAmount);
+      const wimpDiscountUnits = await calculateDiscount(req, { userId: user.id, requestedUnits: requestedWimpUnits, maximumUnits: toUnits(Math.max(0, grossAmount - referralDiscount)) });
+      const wimpDiscount = wimpDiscountUnits / 100;
+      const requiredAmount = Number((grossAmount - referralDiscount - wimpDiscount).toFixed(2));
       if (!requiredAmount) return res.status(400).json({ msg: "Invalid bundle amount" });
       let chargedAmount = requiredAmount;
       let appliedReferralDiscount = referralDiscount;
@@ -272,12 +275,13 @@ router.post("/buy", async (req, res) => {
 
       const transaction = {
         _id: createId(), email, type: "purchase", network: plan.network, provider: plan.provider,
-        amount: requiredAmount, paymentAmount: reference ? chargedAmount : undefined, referralDiscount: appliedReferralDiscount, bundle: bundle || formatBundleLabel(plan),
+        amount: requiredAmount, paymentAmount: reference ? chargedAmount : undefined, referralDiscount: appliedReferralDiscount, wimpDiscount, bundle: bundle || formatBundleLabel(plan),
         phone, paymentMethod: reference ? "paystack" : "wallet",
         status: reference ? "pending" : "completed", reference: reference || createId(),
         date: new Date().toISOString()
       };
       const transactions = readTransactions();
+      if (wimpDiscountUnits > 0) await spendWallet(req, { userId: user.id, amountUnits: wimpDiscountUnits, referenceId: transaction.reference, description: `WIMP discount for ${transaction.bundle}`, idempotencyKey: `wimp-spend:${transaction.reference}` });
       transactions.push(transaction);
       user.referralCredits = Number((Number(user.referralCredits || 0) - appliedReferralDiscount).toFixed(2));
       writeUsers(users);
@@ -336,7 +340,10 @@ router.post("/buy", async (req, res) => {
       const grossAmount = Number(plan.sellingPrice || 0) * safeQuantity;
       const providerCost = Number(plan.cost || plan.total || 0) * safeQuantity;
       const referralDiscount = Math.min(Number(user.referralCredits || 0), Math.max(0, grossAmount - providerCost));
-      const requiredAmount = Number((grossAmount - referralDiscount).toFixed(2));
+      const requestedWimpUnits = Number.isInteger(Number(incoming.wimpUnits)) ? Number(incoming.wimpUnits) : toUnits(incoming.wimpAmount);
+      const wimpDiscountUnits = await calculateDiscount(req, { userId: String(user._id), requestedUnits: requestedWimpUnits, maximumUnits: toUnits(Math.max(0, grossAmount - referralDiscount - providerCost)) });
+      const wimpDiscount = wimpDiscountUnits / 100;
+      const requiredAmount = Number((grossAmount - referralDiscount - wimpDiscount).toFixed(2));
       const providerFee = Number(plan.fee || 0) * safeQuantity;
       const smsFee = Number(plan.smsFee || 0) * safeQuantity;
       const expectedProfit = Number(plan.expectedProfit || 0) * safeQuantity;
@@ -398,6 +405,7 @@ router.post("/buy", async (req, res) => {
         provider: plan.provider,
         amount: requiredAmount,
         paymentAmount: reference ? chargedAmount : undefined,
+        wimpDiscount,
         providerCost: Number(plan.price || providerCost),
         referralDiscount: appliedReferralDiscount,
         providerFee,
@@ -412,6 +420,7 @@ router.post("/buy", async (req, res) => {
       });
 
       try {
+        if (wimpDiscountUnits > 0) await spendWallet(req, { userId: String(user._id), amountUnits: wimpDiscountUnits, referenceId: String(reference || requestId), description: `WIMP discount for ${bundle || formatBundleLabel(plan)}`, idempotencyKey: `wimp-spend:${reference || requestId}` });
         let providerPlan = plan;
         let result;
         try {
@@ -475,6 +484,7 @@ router.post("/buy", async (req, res) => {
         await tx.save();
 
         if (tx.status === "failed") {
+          if (wimpDiscountUnits > 0) await adjustWallet(req, { userId: String(user._id), amountUnits: wimpDiscountUnits, type: "refund", referenceId: String(reference || requestId), description: `WIMP discount refund for failed purchase ${tx.bundle}`, createdBy: "system", idempotencyKey: `wimp-refund:${reference || requestId}` });
           const refunded = reference ? await refundPaystackReference(reference) : true;
           return res.status(502).json({
             msg: reference
@@ -531,6 +541,10 @@ router.post("/buy", async (req, res) => {
 
         tx.status = reference ? "refunded" : "failed";
         tx.actualProfit = 0;
+        if (wimpDiscountUnits > 0) {
+          try { await adjustWallet(req, { userId: String(user._id), amountUnits: wimpDiscountUnits, type: "refund", referenceId: String(reference || requestId), description: `WIMP discount refund for failed purchase ${tx.bundle}`, createdBy: "system", idempotencyKey: `wimp-refund:${reference || requestId}` }); }
+          catch (wimpError) { console.error("WIMP DISCOUNT REFUND ERROR:", wimpError.message); }
+        }
         const refunded = reference ? await refundPaystackReference(reference) : true;
         await tx.save();
 

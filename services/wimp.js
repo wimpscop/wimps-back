@@ -63,6 +63,13 @@ async function getWallet(req, userId) {
   return ensureWallet(req, userId);
 }
 
+async function calculateDiscount(req, { userId, requestedUnits, maximumUnits }) {
+  const settings = await getSettings(req);
+  if (!settings.redemptionEnabled || !Number.isInteger(requestedUnits) || requestedUnits <= 0) return 0;
+  const wallet = await getWallet(req, userId);
+  return Math.min(requestedUnits, Number(wallet.balanceUnits || 0), Number(settings.maximumDiscountUnits || requestedUnits), Math.max(0, Number(maximumUnits || 0)));
+}
+
 async function awardCompletedPurchase(req, { userId, referenceId, description }) {
   const settings = await getSettings(req);
   const amountUnits = Math.max(0, Number(settings.rewardPerCompletedPurchaseUnits || 0));
@@ -229,4 +236,4 @@ async function reverseCompletedPurchaseReward(req, { userId, referenceId, descri
   return adjustWallet(req, { userId, amountUnits: Number(ledger.amountUnits), type: "refund", referenceId, description, createdBy: "system", idempotencyKey, debit: true });
 }
 
-module.exports = { DEFAULT_SETTINGS, toUnits, publicWallet, getSettings, getLedger, ensureWallet, getWallet, awardCompletedPurchase, reverseCompletedPurchaseReward, spendWallet, adjustWallet, saveSettings };
+module.exports = { DEFAULT_SETTINGS, toUnits, publicWallet, getSettings, getLedger, ensureWallet, getWallet, calculateDiscount, awardCompletedPurchase, reverseCompletedPurchaseReward, spendWallet, adjustWallet, saveSettings };
