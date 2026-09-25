@@ -82,6 +82,28 @@ router.get("/config", (req, res) => {
   });
 });
 
+// Check if email exists (for signup form UX)
+router.post("/check-email", async (req, res) => {
+  try {
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    if (!email || !email.includes("@")) {
+      return res.status(400).json({ exists: false, msg: "Invalid email" });
+    }
+
+    if (isFallback(req)) {
+      const users = readUsers();
+      const exists = users.some((item) => String(item.email || "").toLowerCase() === email);
+      return res.json({ exists });
+    }
+
+    const user = await User.findOne({ email }).lean();
+    return res.json({ exists: !!user });
+  } catch (err) {
+    console.error("CHECK EMAIL ERROR:", err);
+    return res.status(500).json({ exists: false, msg: "Server error" });
+  }
+});
+
 router.get("/session", requireUser, (req, res) => {
   res.json({ authenticated: true, user: req.user });
 });

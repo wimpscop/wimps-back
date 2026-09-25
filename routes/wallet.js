@@ -253,6 +253,7 @@ router.post("/buy", async (req, res) => {
       const referralDiscount = Math.min(Number(user.referralCredits || 0), grossAmount);
       const requestedWimpUnits = Number.isInteger(Number(incoming.wimpUnits)) ? Number(incoming.wimpUnits) : toUnits(incoming.wimpAmount);
       const wimpDiscountUnits = await calculateDiscount(req, { userId: user.id, requestedUnits: requestedWimpUnits, maximumUnits: toUnits(Math.max(0, grossAmount - referralDiscount)) });
+      if (wimpDiscountUnits < 0) return res.status(400).json({ msg: "The requested WIMP amount is below the minimum redemption amount" });
       const wimpDiscount = wimpDiscountUnits / 100;
       const requiredAmount = Number((grossAmount - referralDiscount - wimpDiscount).toFixed(2));
       if (requiredAmount < 0) return res.status(400).json({ msg: "Invalid bundle amount" });
@@ -342,6 +343,7 @@ router.post("/buy", async (req, res) => {
       const referralDiscount = Math.min(Number(user.referralCredits || 0), Math.max(0, grossAmount - providerCost));
       const requestedWimpUnits = Number.isInteger(Number(incoming.wimpUnits)) ? Number(incoming.wimpUnits) : toUnits(incoming.wimpAmount);
       const wimpDiscountUnits = await calculateDiscount(req, { userId: String(user._id), requestedUnits: requestedWimpUnits, maximumUnits: toUnits(Math.max(0, grossAmount - referralDiscount)) });
+      if (wimpDiscountUnits < 0) return res.status(400).json({ msg: "The requested WIMP amount is below the minimum redemption amount" });
       const wimpDiscount = wimpDiscountUnits / 100;
       const requiredAmount = Number((grossAmount - referralDiscount - wimpDiscount).toFixed(2));
       const providerFee = Number(plan.fee || 0) * safeQuantity;

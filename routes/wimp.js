@@ -32,6 +32,7 @@ router.post("/redeem", async (req, res) => {
     if (!plan || plan.available === false || plan.purchasable === false) return res.status(409).json({ msg: "Selected product is unavailable" });
     const priceUnits = toUnits(plan.sellingPrice);
     const maximumUnits = Math.min(requestedUnits, Number(settings.maximumDiscountUnits || requestedUnits), priceUnits || requestedUnits);
+    if (requestedUnits < Number(settings.minimumRedemptionUnits || 0)) return res.status(400).json({ msg: `The minimum WIMP redemption is ${(Number(settings.minimumRedemptionUnits || 0) / 100).toFixed(2)} WIMP` });
     if (!priceUnits || maximumUnits <= 0) return res.status(400).json({ msg: "This product has no valid redemption price" });
     const result = await spendWallet(req, { userId: req.user.sub, amountUnits: maximumUnits, referenceId: `redeem:${idempotencyKey}`, description: `WIMP discount for ${plan.name || planId}`, idempotencyKey });
     return res.json({ msg: result.duplicate ? "Redemption already processed" : "WIMP discount applied", discount: maximumUnits / 100, ledger: result.ledger });

@@ -10,6 +10,7 @@ const DEFAULT_SETTINGS = {
   enabled: true,
   rewardPerCompletedPurchaseUnits: 10,
   redemptionEnabled: true,
+  minimumRedemptionUnits: 1,
   maximumDiscountUnits: 1000,
   minimumOrderAmount: 0,
   autoCompleteEnabled: true,
@@ -78,6 +79,7 @@ async function getWallet(req, userId) {
 async function calculateDiscount(req, { userId, requestedUnits, maximumUnits }) {
   const settings = await getSettings(req);
   if (!settings.redemptionEnabled || !Number.isInteger(requestedUnits) || requestedUnits <= 0) return 0;
+  if (requestedUnits < Number(settings.minimumRedemptionUnits || 0)) return -1;
   const wallet = await getWallet(req, userId);
   return Math.min(requestedUnits, Number(wallet.balanceUnits || 0), Number(settings.maximumDiscountUnits || requestedUnits), Math.max(0, Number(maximumUnits || 0)));
 }

@@ -67,6 +67,11 @@ router.put("/settings", async (req, res) => {
     if (units === null) return res.status(400).json({ msg: "Invalid maximum discount" });
     values.maximumDiscountUnits = units;
   }
+  if (input.minimumRedemption !== undefined) {
+    const units = toUnits(input.minimumRedemption);
+    if (units === null) return res.status(400).json({ msg: "Invalid minimum redemption" });
+    values.minimumRedemptionUnits = units;
+  }
   if (input.autoCompleteEnabled !== undefined) values.autoCompleteEnabled = Boolean(input.autoCompleteEnabled);
   if (input.autoCompleteHours !== undefined) {
     const hours = Number(input.autoCompleteHours);
