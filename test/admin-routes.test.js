@@ -109,10 +109,16 @@ test('overview serves the local fallback summary when the database is unavailabl
       assert.equal(body.failedOrders, 0);
     });
   } finally {
-    if (previousUsers === null) fs.unlinkSync(usersFile);
-    else fs.writeFileSync(usersFile, previousUsers);
-    if (previousTransactions === null) fs.unlinkSync(transactionsFile);
-    else fs.writeFileSync(transactionsFile, previousTransactions);
+    if (previousUsers === null) {
+      if (fs.existsSync(usersFile)) fs.unlinkSync(usersFile);
+    } else {
+      fs.writeFileSync(usersFile, previousUsers);
+    }
+    if (previousTransactions === null) {
+      if (fs.existsSync(transactionsFile)) fs.unlinkSync(transactionsFile);
+    } else {
+      fs.writeFileSync(transactionsFile, previousTransactions);
+    }
   }
 });
 

@@ -11,7 +11,7 @@ const { runAutoCompleteSweep } = require('../services/autoComplete');
 const { readUsers, writeUsers, readTransactions, writeTransactions } = require('../utils/localStore');
 
 const dataDir = path.join(__dirname, '..', 'data');
-const files = ['wimp-wallets.json', 'wimp-ledger.json', 'wimp-settings.json', 'users.json'];
+const files = ['wimp-wallets.json', 'wimp-ledger.json', 'wimp-settings.json', 'users.json', 'transactions.json'];
 const originals = Object.fromEntries(files.map((name) => {
   const file = path.join(dataDir, name);
   return [name, fs.existsSync(file) ? fs.readFileSync(file) : null];

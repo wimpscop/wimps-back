@@ -4,7 +4,15 @@ const path = require("path");
 function readData(file) {
   const filePath = path.join(__dirname, "../data", file);
   if (!fs.existsSync(filePath)) return [];
-  return JSON.parse(fs.readFileSync(filePath));
+
+  const raw = fs.readFileSync(filePath, 'utf8').trim();
+  if (!raw) return [];
+
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    return [];
+  }
 }
 
 function writeData(file, data) {

@@ -18,7 +18,7 @@ async function runAutoCompleteSweep(app) {
       transaction.status = "completed";
       transaction.deliveredAt = new Date().toISOString();
       const user = users.find((item) => String(item.email || "").toLowerCase() === String(transaction.email || "").toLowerCase());
-      if (user) await awardCompletedPurchase(req, { userId: String(user.id), referenceId: String(transaction._id || transaction.reference), description: `Automatic reward for completed purchase ${transaction.bundle || transaction.reference}` });
+      if (user) await awardCompletedPurchase(req, { userId: String(user.id), referenceId: String(transaction._id || transaction.reference), description: `Reward for completed purchase ${transaction.bundle || transaction.reference}` });
       completed += 1;
     }
     if (completed) writeTransactions(transactions);
@@ -34,7 +34,7 @@ async function runAutoCompleteSweep(app) {
     ).lean();
     if (!claimed) continue;
     const user = await require("../models/user").findOne({ email: claimed.email }).lean();
-    if (user) await awardCompletedPurchase(req, { userId: String(user._id), referenceId: String(claimed._id || claimed.reference), description: `Automatic reward for completed purchase ${claimed.bundle || claimed.reference}` });
+    if (user) await awardCompletedPurchase(req, { userId: String(user._id), referenceId: String(claimed._id || claimed.reference), description: `Reward for completed purchase ${claimed.bundle || claimed.reference}` });
     completed += 1;
   }
   return { enabled: true, completed };
