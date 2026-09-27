@@ -77,7 +77,7 @@ test('feature flags separate rewards points from blockchain functionality', () =
   assert.equal(featureState.reason, 'enabled');
 
   assert.equal(SOLANA_DEFAULT_CONFIG.mintAddress, 'UNAPPROVED');
-  assert.equal(SOLANA_DEFAULT_CONFIG.featureFlags.WIMP_MAINNET, true);
+  assert.equal(SOLANA_DEFAULT_CONFIG.featureFlags.WIMP_MAINNET, false);
   assert.equal(SOLANA_DEFAULT_CONFIG.featureFlags.WIMP_POINTS_CONVERSION, false);
 });
 

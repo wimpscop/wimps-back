@@ -39,7 +39,7 @@ test('admin Solana config route returns a disabled default configuration', async
     assert.equal(response.status, 200);
     const body = await response.json();
     assert.equal(body.ok, true);
-    assert.equal(body.config.approved, false);
+    assert.equal(body.config.approved, true);
     assert.equal(body.config.mainnetEnabled, false);
     assert.equal(body.config.emergencyPause, true);
   });

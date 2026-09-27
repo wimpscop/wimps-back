@@ -36,7 +36,7 @@ const SOLANA_DEFAULT_CONFIG = Object.freeze({
   freezeAuthorityStatus: 'unknown',
   metadataMutability: 'mutable',
   approved: true,
-  mainnetEnabled: true,
+  mainnetEnabled: false,
   testnetEnabled: true,
   publicTradingEnabled: false,
   emergencyPause: true,
@@ -53,7 +53,7 @@ const SOLANA_DEFAULT_CONFIG = Object.freeze({
     [FEATURE_FLAGS.WIMP_BUY]: false,
     [FEATURE_FLAGS.WIMP_SELL]: false,
     [FEATURE_FLAGS.WIMP_CASHOUT]: false,
-    [FEATURE_FLAGS.WIMP_MAINNET]: true,
+    [FEATURE_FLAGS.WIMP_MAINNET]: false,
     [FEATURE_FLAGS.WIMP_TESTNET]: true,
     [FEATURE_FLAGS.WIMP_PUBLIC_TRADING]: false,
     [FEATURE_FLAGS.WIMP_EMERGENCY_PAUSE]: true
