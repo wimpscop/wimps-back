@@ -32,6 +32,14 @@ function publicWallet(wallet) {
   };
 }
 
+function rewardLedgerEntries(entries) {
+  return entries.filter((item) => String(item.scope || "reward") === "reward");
+}
+
+function tokenLedgerEntries(entries) {
+  return entries.filter((item) => String(item.scope || "reward") === "token");
+}
+
 function settingsFromRecords(records) {
   return { ...DEFAULT_SETTINGS, ...Object.fromEntries(records.map((item) => [item.key, item.value])) };
 }
@@ -45,7 +53,7 @@ async function getSettings(req) {
 async function ensureWallet(req, userId, session) {
   if (isFallback(req)) {
     const wallets = readWallets();
-    const ledger = readLedger().filter((item) => String(item.userId) === String(userId)).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    const ledger = rewardLedgerEntries(readLedger().filter((item) => String(item.userId) === String(userId))).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     let wallet = wallets.find((item) => String(item.userId) === String(userId));
     if (!wallet) {
       wallet = { id: crypto.randomUUID(), userId: String(userId), balanceUnits: Number(ledger[0]?.balanceAfterUnits || 0), version: 0, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
@@ -60,12 +68,44 @@ async function ensureWallet(req, userId, session) {
   }
   const wallet = await WimpWallet.findOneAndUpdate(
     { userId: String(userId) },
-    { $setOnInsert: { userId: String(userId), balanceUnits: 0, version: 0, createdAt: new Date() }, $set: { updatedAt: new Date() } },
+    { $setOnInsert: { userId: String(userId), balanceUnits: 0, tokenBalanceUnits: 0, version: 0, createdAt: new Date() }, $set: { updatedAt: new Date() } },
     { upsert: true, new: true, session }
   );
-  const latest = await WimpLedger.findOne({ userId: String(userId) }).sort({ createdAt: -1 }).session(session).lean();
+  const latest = await WimpLedger.findOne({ userId: String(userId), scope: "reward" }).sort({ createdAt: -1 }).session(session).lean();
   if (latest && Number(latest.balanceAfterUnits || 0) > Number(wallet.balanceUnits || 0)) {
     wallet.balanceUnits = Number(latest.balanceAfterUnits);
+    wallet.updatedAt = new Date();
+    await wallet.save({ session });
+  }
+  return wallet;
+}
+
+async function ensureTokenWallet(req, userId, session) {
+  if (isFallback(req)) {
+    const wallets = readWallets();
+    const ledger = tokenLedgerEntries(readLedger().filter((item) => String(item.userId) === String(userId))).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    let wallet = wallets.find((item) => String(item.userId) === String(userId));
+    if (!wallet) {
+      wallet = { id: crypto.randomUUID(), userId: String(userId), balanceUnits: 0, tokenBalanceUnits: Number(ledger[0]?.balanceAfterUnits || 0), version: 0, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+      wallets.push(wallet);
+      writeWallets(wallets);
+      return wallet;
+    }
+    if (!Object.prototype.hasOwnProperty.call(wallet, "tokenBalanceUnits") || Number(wallet.tokenBalanceUnits || 0) < Number(ledger[0]?.balanceAfterUnits || 0)) {
+      wallet.tokenBalanceUnits = Number(ledger[0]?.balanceAfterUnits || Number(wallet.tokenBalanceUnits || 0));
+      wallet.updatedAt = new Date().toISOString();
+      writeWallets(wallets);
+    }
+    return wallet;
+  }
+  const wallet = await WimpWallet.findOneAndUpdate(
+    { userId: String(userId) },
+    { $setOnInsert: { userId: String(userId), balanceUnits: 0, tokenBalanceUnits: 0, version: 0, createdAt: new Date() }, $set: { updatedAt: new Date() } },
+    { upsert: true, new: true, session }
+  );
+  const latest = await WimpLedger.findOne({ userId: String(userId), scope: "token" }).sort({ createdAt: -1 }).session(session).lean();
+  if (latest && Number(latest.balanceAfterUnits || 0) > Number(wallet.tokenBalanceUnits || 0)) {
+    wallet.tokenBalanceUnits = Number(latest.balanceAfterUnits);
     wallet.updatedAt = new Date();
     await wallet.save({ session });
   }
@@ -85,15 +125,76 @@ async function calculateDiscount(req, { userId, requestedUnits, maximumUnits }) 
 }
 
 async function getTokenBalance(req, userId) {
-  const wallet = await getWallet(req, userId);
-  return { balanceUnits: Number(wallet.balanceUnits || 0), balance: Number(wallet.balanceUnits || 0) / 100, wallet: publicWallet(wallet) };
+  const wallet = await ensureTokenWallet(req, userId);
+  return {
+    balanceUnits: Number(wallet.tokenBalanceUnits || 0),
+    balance: Number(wallet.tokenBalanceUnits || 0) / 100,
+    wallet: { balanceUnits: Number(wallet.tokenBalanceUnits || 0), balance: Number(wallet.tokenBalanceUnits || 0) / 100, updatedAt: wallet.updatedAt }
+  };
+}
+
+async function adjustTokenWallet(req, { userId, amountUnits, type, referenceId, description, createdBy, idempotencyKey, debit = false }) {
+  if (!Number.isInteger(amountUnits) || amountUnits <= 0) throw new Error("Invalid WIMP token amount");
+  if (!idempotencyKey) throw new Error("Idempotency key is required");
+  if (!["purchase", "refund", "admin_adjustment", "spend"].includes(type)) throw new Error("Invalid WIMP token transaction type");
+  if (isFallback(req)) {
+    const ledger = readLedger();
+    if (ledger.some((item) => item.idempotencyKey === idempotencyKey)) return { duplicate: true };
+    const wallets = readWallets();
+    let wallet = wallets.find((item) => String(item.userId) === String(userId));
+    if (!wallet) {
+      wallet = { id: crypto.randomUUID(), userId: String(userId), balanceUnits: 0, tokenBalanceUnits: 0, version: 0, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+      wallets.push(wallet);
+    }
+    const before = Number(wallet.tokenBalanceUnits || 0);
+    if (debit && before < amountUnits) throw new Error("Insufficient WIMP token balance");
+    wallet.tokenBalanceUnits = before + (debit ? -amountUnits : amountUnits);
+    wallet.version = Number(wallet.version || 0) + 1;
+    wallet.updatedAt = new Date().toISOString();
+    const entry = { id: crypto.randomUUID(), userId: String(userId), walletId: wallet.id, scope: "token", type, amountUnits, balanceBeforeUnits: before, balanceAfterUnits: wallet.tokenBalanceUnits, referenceId: String(referenceId || ""), description, createdBy: String(createdBy || ""), idempotencyKey, createdAt: new Date().toISOString() };
+    ledger.push(entry); writeWallets(wallets); writeLedger(ledger); return { duplicate: false, ledger: entry };
+  }
+  const session = await mongoose.startSession();
+  try {
+    let result;
+    await session.withTransaction(async () => {
+      if (await WimpLedger.exists({ idempotencyKey }).session(session)) { result = { duplicate: true }; return; }
+      const wallet = await ensureTokenWallet(req, userId, session);
+      const before = Number(wallet.tokenBalanceUnits || 0);
+      if (debit && before < amountUnits) throw new Error("Insufficient WIMP token balance");
+      wallet.tokenBalanceUnits = before + (debit ? -amountUnits : amountUnits);
+      wallet.version = Number(wallet.version || 0) + 1;
+      wallet.updatedAt = new Date();
+      await wallet.save({ session });
+      const [entry] = await WimpLedger.create([{ userId: String(userId), walletId: String(wallet._id), scope: "token", type, amountUnits, balanceBeforeUnits: before, balanceAfterUnits: wallet.tokenBalanceUnits, referenceId: String(referenceId || ""), description, createdBy: String(createdBy || ""), idempotencyKey }], { session });
+      result = { duplicate: false, ledger: entry };
+    });
+    return result;
+  } finally { await session.endSession(); }
+}
+
+async function spendTokenWallet(req, { userId, amountUnits, referenceId, description, idempotencyKey, createdBy = "system" }) {
+  if (!Number.isInteger(amountUnits) || amountUnits <= 0) throw new Error("Invalid WIMP token amount");
+  if (!idempotencyKey) throw new Error("Idempotency key is required");
+  const key = String(idempotencyKey || referenceId || `${userId}:${Date.now()}`).trim();
+  const result = await adjustTokenWallet(req, {
+    userId,
+    amountUnits,
+    type: "spend",
+    referenceId: String(referenceId || key),
+    description: String(description || "WIMP token spend for order").trim() || "WIMP token spend for order",
+    createdBy,
+    idempotencyKey: key,
+    debit: true
+  });
+  return result;
 }
 
 async function purchaseToken(req, { userId, amountUnits, source = "card", referenceId, description, idempotencyKey, createdBy = "system" }) {
   if (!Number.isInteger(amountUnits) || amountUnits <= 0) throw new Error("Invalid WIMP token amount");
   const key = String(idempotencyKey || referenceId || `${source}:${userId}:${Date.now()}`).trim();
   const descriptionText = String(description || `WIMP token purchase via ${source}`).trim() || `WIMP token purchase via ${source}`;
-  const result = await adjustWallet(req, {
+  const result = await adjustTokenWallet(req, {
     userId,
     amountUnits,
     type: "purchase",
@@ -110,7 +211,7 @@ async function spendTokenForOrder(req, { userId, amountUnits, referenceId, descr
   if (!Number.isInteger(amountUnits) || amountUnits <= 0) throw new Error("Invalid WIMP token spend amount");
   const key = String(idempotencyKey || referenceId || `${userId}:${Date.now()}`).trim();
   const descriptionText = String(description || "WIMP token spend for order").trim() || "WIMP token spend for order";
-  const result = await spendWallet(req, {
+  const result = await spendTokenWallet(req, {
     userId,
     amountUnits,
     referenceId: String(referenceId || key),
@@ -140,7 +241,7 @@ async function awardCompletedPurchase(req, { userId, referenceId, description })
     wallet.balanceUnits = before + amountUnits;
     wallet.version = Number(wallet.version || 0) + 1;
     wallet.updatedAt = new Date().toISOString();
-    ledger.push({ id: crypto.randomUUID(), userId: String(userId), walletId: wallet.id, type: "earn", amountUnits, balanceBeforeUnits: before, balanceAfterUnits: wallet.balanceUnits, referenceId: String(referenceId), description, idempotencyKey, createdAt: new Date().toISOString() });
+    ledger.push({ id: crypto.randomUUID(), userId: String(userId), walletId: wallet.id, scope: "reward", type: "earn", amountUnits, balanceBeforeUnits: before, balanceAfterUnits: wallet.balanceUnits, referenceId: String(referenceId), description, idempotencyKey, createdAt: new Date().toISOString() });
     writeWallets(wallets);
     writeLedger(ledger);
     return { awarded: true, amountUnits };
@@ -159,7 +260,7 @@ async function awardCompletedPurchase(req, { userId, referenceId, description })
       wallet.updatedAt = new Date();
       await wallet.save({ session });
       await WimpLedger.create([{
-        userId: String(userId), walletId: String(wallet._id), type: "earn", amountUnits,
+        userId: String(userId), walletId: String(wallet._id), scope: "reward", type: "earn", amountUnits,
         balanceBeforeUnits: before, balanceAfterUnits: wallet.balanceUnits,
         referenceId: String(referenceId), description, idempotencyKey
       }], { session });
@@ -191,7 +292,7 @@ async function spendWallet(req, { userId, amountUnits, referenceId, description,
     wallet.balanceUnits -= amountUnits;
     wallet.version = Number(wallet.version || 0) + 1;
     wallet.updatedAt = new Date().toISOString();
-    const entry = { id: crypto.randomUUID(), userId: String(userId), walletId: wallet.id, type: "spend", amountUnits, balanceBeforeUnits: before, balanceAfterUnits: wallet.balanceUnits, referenceId: String(referenceId || ""), description, idempotencyKey, createdAt: new Date().toISOString() };
+    const entry = { id: crypto.randomUUID(), userId: String(userId), walletId: wallet.id, scope: "reward", type: "spend", amountUnits, balanceBeforeUnits: before, balanceAfterUnits: wallet.balanceUnits, referenceId: String(referenceId || ""), description, idempotencyKey, createdAt: new Date().toISOString() };
     ledger.push(entry);
     writeWallets(wallets);
     writeLedger(ledger);
@@ -215,7 +316,7 @@ async function spendWallet(req, { userId, amountUnits, referenceId, description,
       if (!wallet) throw new Error("Insufficient WIMP balance");
       const before = Number(wallet.balanceUnits) + amountUnits;
       const [entry] = await WimpLedger.create([{
-        userId: String(userId), walletId: String(wallet._id), type: "spend", amountUnits,
+        userId: String(userId), walletId: String(wallet._id), scope: "reward", type: "spend", amountUnits,
         balanceBeforeUnits: before, balanceAfterUnits: Number(wallet.balanceUnits),
         referenceId: String(referenceId || ""), description, idempotencyKey
       }], { session });
@@ -241,7 +342,7 @@ async function adjustWallet(req, { userId, amountUnits, type, referenceId, descr
     if (debit && before < amountUnits) throw new Error("Insufficient WIMP balance");
     wallet.balanceUnits = before + (debit ? -amountUnits : amountUnits);
     wallet.version = Number(wallet.version || 0) + 1;
-    const entry = { id: crypto.randomUUID(), userId: String(userId), walletId: wallet.id, type, amountUnits, balanceBeforeUnits: before, balanceAfterUnits: wallet.balanceUnits, referenceId: String(referenceId || ""), description, createdBy: String(createdBy || ""), idempotencyKey, createdAt: new Date().toISOString() };
+    const entry = { id: crypto.randomUUID(), userId: String(userId), walletId: wallet.id, scope: "reward", type, amountUnits, balanceBeforeUnits: before, balanceAfterUnits: wallet.balanceUnits, referenceId: String(referenceId || ""), description, createdBy: String(createdBy || ""), idempotencyKey, createdAt: new Date().toISOString() };
     ledger.push(entry); writeWallets(wallets); writeLedger(ledger); return { duplicate: false, ledger: entry };
   }
   const session = await mongoose.startSession();
@@ -256,7 +357,7 @@ async function adjustWallet(req, { userId, amountUnits, type, referenceId, descr
       wallet.version = Number(wallet.version || 0) + 1;
       wallet.updatedAt = new Date();
       await wallet.save({ session });
-      const [entry] = await WimpLedger.create([{ userId: String(userId), walletId: String(wallet._id), type, amountUnits, balanceBeforeUnits: before, balanceAfterUnits: wallet.balanceUnits, referenceId: String(referenceId || ""), description, createdBy: String(createdBy || ""), idempotencyKey }], { session });
+      const [entry] = await WimpLedger.create([{ userId: String(userId), walletId: String(wallet._id), scope: "reward", type, amountUnits, balanceBeforeUnits: before, balanceAfterUnits: wallet.balanceUnits, referenceId: String(referenceId || ""), description, createdBy: String(createdBy || ""), idempotencyKey }], { session });
       result = { duplicate: false, ledger: entry };
     });
     return result;
@@ -302,6 +403,7 @@ module.exports = {
   awardCompletedPurchase,
   reverseCompletedPurchaseReward,
   spendWallet,
+  ensureTokenWallet,
   adjustWallet,
   saveSettings
 };

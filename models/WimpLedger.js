@@ -3,6 +3,12 @@ const mongoose = require("mongoose");
 const WimpLedgerSchema = new mongoose.Schema({
   userId: { type: String, required: true, index: true },
   walletId: { type: String, required: true },
+  scope: {
+    type: String,
+    enum: ["reward", "token"],
+    default: "reward",
+    index: true
+  },
   type: {
     type: String,
     enum: ["earn", "spend", "refund", "expiry", "admin_adjustment", "purchase"],

@@ -82,6 +82,38 @@ test('platform token purchase and spend flow updates the app balance without exp
   assert.equal((await getLedger(req, userId)).length, 2);
 });
 
+test('reward points and app token balance are tracked separately', async () => {
+  const req = fallbackRequest();
+  const userId = `wimp-separated-${Date.now()}`;
+  const { purchaseToken, spendTokenForOrder, getTokenBalance, awardCompletedPurchase, getWallet } = require('../services/wimp');
+
+  await awardCompletedPurchase(req, { userId, referenceId: 'reward-separate-1', description: 'Completed reward purchase' });
+  await purchaseToken(req, {
+    userId,
+    amountUnits: 5000,
+    source: 'card',
+    referenceId: 'token-buy-separated-1',
+    description: 'Token top-up',
+    idempotencyKey: 'token-buy-separated-1'
+  });
+
+  const rewardBalance = await getWallet(req, userId);
+  const tokenBalance = await getTokenBalance(req, userId);
+  assert.equal(rewardBalance.balanceUnits, 10);
+  assert.equal(tokenBalance.balanceUnits, 5000);
+
+  await spendTokenForOrder(req, {
+    userId,
+    amountUnits: 1250,
+    referenceId: 'token-spend-separated-1',
+    description: 'Use token for app purchase',
+    idempotencyKey: 'token-spend-separated-1'
+  });
+
+  assert.equal((await getTokenBalance(req, userId)).balanceUnits, 3750);
+  assert.equal((await getWallet(req, userId)).balanceUnits, 10);
+});
+
 test('spending is idempotent and cannot make the wallet negative', async () => {
   const req = fallbackRequest();
   const userId = `wimp-spend-${Date.now()}`;
