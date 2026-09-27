@@ -52,6 +52,36 @@ test('repairs a missing wallet from the latest ledger balance', async () => {
   assert.equal((await getWallet(req, userId)).balanceUnits, 450);
 });
 
+test('platform token purchase and spend flow updates the app balance without exposing wallet details', async () => {
+  const req = fallbackRequest();
+  const userId = `wimp-platform-${Date.now()}`;
+  const { purchaseToken, spendTokenForOrder, getTokenBalance } = require('../services/wimp');
+
+  const purchase = await purchaseToken(req, {
+    userId,
+    amountUnits: 5000,
+    source: 'card',
+    referenceId: 'platform-buy-1',
+    description: 'Top-up WIMP balance',
+    idempotencyKey: 'platform-buy-1'
+  });
+
+  assert.equal(purchase.duplicate, false);
+  assert.equal((await getTokenBalance(req, userId)).balanceUnits, 5000);
+
+  const spend = await spendTokenForOrder(req, {
+    userId,
+    amountUnits: 1250,
+    referenceId: 'bundle-order-1',
+    description: 'Bundle purchase',
+    idempotencyKey: 'bundle-order-1'
+  });
+
+  assert.equal(spend.duplicate, false);
+  assert.equal((await getTokenBalance(req, userId)).balanceUnits, 3750);
+  assert.equal((await getLedger(req, userId)).length, 2);
+});
+
 test('spending is idempotent and cannot make the wallet negative', async () => {
   const req = fallbackRequest();
   const userId = `wimp-spend-${Date.now()}`;

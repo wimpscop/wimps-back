@@ -72,6 +72,34 @@ router.put("/settings", async (req, res) => {
     if (units === null) return res.status(400).json({ msg: "Invalid minimum redemption" });
     values.minimumRedemptionUnits = units;
   }
+  if (input.tokenEnabled !== undefined) values.tokenEnabled = Boolean(input.tokenEnabled);
+  if (input.tokenPurchaseEnabled !== undefined) values.tokenPurchaseEnabled = Boolean(input.tokenPurchaseEnabled);
+  if (input.tokenSpendEnabled !== undefined) values.tokenSpendEnabled = Boolean(input.tokenSpendEnabled);
+  if (input.tokenMinPurchase !== undefined) {
+    const units = toUnits(input.tokenMinPurchase);
+    if (units === null) return res.status(400).json({ msg: "Invalid minimum token purchase" });
+    values.tokenMinPurchaseUnits = units;
+  }
+  if (input.tokenMaxPurchase !== undefined) {
+    const units = toUnits(input.tokenMaxPurchase);
+    if (units === null) return res.status(400).json({ msg: "Invalid maximum token purchase" });
+    values.tokenMaxPurchaseUnits = units;
+  }
+  if (input.tokenMinSpend !== undefined) {
+    const units = toUnits(input.tokenMinSpend);
+    if (units === null) return res.status(400).json({ msg: "Invalid minimum token spend" });
+    values.tokenMinSpendUnits = units;
+  }
+  if (input.tokenBuyFeePercent !== undefined) {
+    const value = Number(input.tokenBuyFeePercent);
+    if (!Number.isFinite(value) || value < 0 || value > 100) return res.status(400).json({ msg: "Buy fee must be between 0 and 100" });
+    values.tokenBuyFeePercent = value;
+  }
+  if (input.tokenSellFeePercent !== undefined) {
+    const value = Number(input.tokenSellFeePercent);
+    if (!Number.isFinite(value) || value < 0 || value > 100) return res.status(400).json({ msg: "Sell fee must be between 0 and 100" });
+    values.tokenSellFeePercent = value;
+  }
   if (input.autoCompleteEnabled !== undefined) values.autoCompleteEnabled = Boolean(input.autoCompleteEnabled);
   if (input.autoCompleteHours !== undefined) {
     const hours = Number(input.autoCompleteHours);

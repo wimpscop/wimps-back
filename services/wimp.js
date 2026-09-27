@@ -84,6 +84,43 @@ async function calculateDiscount(req, { userId, requestedUnits, maximumUnits }) 
   return Math.min(requestedUnits, Number(wallet.balanceUnits || 0), Number(settings.maximumDiscountUnits || requestedUnits), Math.max(0, Number(maximumUnits || 0)));
 }
 
+async function getTokenBalance(req, userId) {
+  const wallet = await getWallet(req, userId);
+  return { balanceUnits: Number(wallet.balanceUnits || 0), balance: Number(wallet.balanceUnits || 0) / 100, wallet: publicWallet(wallet) };
+}
+
+async function purchaseToken(req, { userId, amountUnits, source = "card", referenceId, description, idempotencyKey, createdBy = "system" }) {
+  if (!Number.isInteger(amountUnits) || amountUnits <= 0) throw new Error("Invalid WIMP token amount");
+  const key = String(idempotencyKey || referenceId || `${source}:${userId}:${Date.now()}`).trim();
+  const descriptionText = String(description || `WIMP token purchase via ${source}`).trim() || `WIMP token purchase via ${source}`;
+  const result = await adjustWallet(req, {
+    userId,
+    amountUnits,
+    type: "purchase",
+    referenceId: String(referenceId || key),
+    description: descriptionText,
+    createdBy,
+    idempotencyKey: key,
+    debit: false
+  });
+  return { duplicate: Boolean(result?.duplicate), ledger: result?.ledger || null };
+}
+
+async function spendTokenForOrder(req, { userId, amountUnits, referenceId, description, idempotencyKey, createdBy = "system" }) {
+  if (!Number.isInteger(amountUnits) || amountUnits <= 0) throw new Error("Invalid WIMP token spend amount");
+  const key = String(idempotencyKey || referenceId || `${userId}:${Date.now()}`).trim();
+  const descriptionText = String(description || "WIMP token spend for order").trim() || "WIMP token spend for order";
+  const result = await spendWallet(req, {
+    userId,
+    amountUnits,
+    referenceId: String(referenceId || key),
+    description: descriptionText,
+    idempotencyKey: key,
+    createdBy
+  });
+  return { duplicate: Boolean(result?.duplicate), ledger: result?.ledger || null };
+}
+
 async function awardCompletedPurchase(req, { userId, referenceId, description }) {
   const settings = await getSettings(req);
   const amountUnits = Math.max(0, Number(settings.rewardPerCompletedPurchaseUnits || 0));
@@ -193,7 +230,7 @@ async function spendWallet(req, { userId, amountUnits, referenceId, description,
 async function adjustWallet(req, { userId, amountUnits, type, referenceId, description, createdBy, idempotencyKey, debit = false }) {
   if (!Number.isInteger(amountUnits) || amountUnits <= 0) throw new Error("Invalid WIMP amount");
   if (!idempotencyKey) throw new Error("Idempotency key is required");
-  if (!["earn", "refund", "expiry", "admin_adjustment"].includes(type)) throw new Error("Invalid WIMP transaction type");
+  if (!["earn", "refund", "expiry", "admin_adjustment", "purchase"].includes(type)) throw new Error("Invalid WIMP transaction type");
   if (isFallback(req)) {
     const ledger = readLedger();
     if (ledger.some((item) => item.idempotencyKey === idempotencyKey)) return { duplicate: true };
@@ -250,4 +287,21 @@ async function reverseCompletedPurchaseReward(req, { userId, referenceId, descri
   return adjustWallet(req, { userId, amountUnits: Number(ledger.amountUnits), type: "refund", referenceId, description, createdBy: "system", idempotencyKey, debit: true });
 }
 
-module.exports = { DEFAULT_SETTINGS, toUnits, publicWallet, getSettings, getLedger, ensureWallet, getWallet, calculateDiscount, awardCompletedPurchase, reverseCompletedPurchaseReward, spendWallet, adjustWallet, saveSettings };
+module.exports = {
+  DEFAULT_SETTINGS,
+  toUnits,
+  publicWallet,
+  getSettings,
+  getLedger,
+  ensureWallet,
+  getWallet,
+  getTokenBalance,
+  purchaseToken,
+  spendTokenForOrder,
+  calculateDiscount,
+  awardCompletedPurchase,
+  reverseCompletedPurchaseReward,
+  spendWallet,
+  adjustWallet,
+  saveSettings
+};

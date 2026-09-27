@@ -5,7 +5,7 @@ const WimpLedgerSchema = new mongoose.Schema({
   walletId: { type: String, required: true },
   type: {
     type: String,
-    enum: ["earn", "spend", "refund", "expiry", "admin_adjustment"],
+    enum: ["earn", "spend", "refund", "expiry", "admin_adjustment", "purchase"],
     required: true
   },
   amountUnits: { type: Number, required: true, min: 1 },
