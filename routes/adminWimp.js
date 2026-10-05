@@ -3,7 +3,7 @@ const crypto = require("crypto");
 const User = require("../models/user");
 const { isFallback, readUsers } = require("../utils/localStore");
 const { readLedger } = require("../utils/wimpStore");
-const { getSettings, saveSettings, getLedger, adjustWallet, toUnits } = require("../services/wimp");
+const { getSettings, saveSettings, getLedger, adjustWallet, clearUserWimpData, clearAllWimpData, toUnits } = require("../services/wimp");
 
 const router = express.Router();
 
@@ -35,6 +35,25 @@ router.get("/transactions", async (req, res) => {
     const data = isFallback(req) ? readLedger().sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, limit) : await require("../models/WimpLedger").find().sort({ createdAt: -1 }).limit(limit).lean();
     return res.json({ data });
   } catch (error) { return res.status(500).json({ msg: "Unable to load WIMP transactions" }); }
+});
+
+router.delete("/users/:email", async (req, res) => {
+  const email = String(req.params.email || "").trim().toLowerCase();
+  if (!email || req.body?.confirmation !== "DELETE USER WIMP ACTIVITY") return res.status(400).json({ msg: "Type DELETE USER WIMP ACTIVITY to confirm" });
+  try {
+    const user = await findUser(req, email);
+    if (!user) return res.status(404).json({ msg: "Customer not found" });
+    const result = await clearUserWimpData(req, String(user._id || user.id));
+    return res.json({ msg: "User WIMP activity history deleted. WIMP balances, account, and order history were kept.", data: result });
+  } catch (error) { return res.status(500).json({ msg: "Unable to delete user WIMP activity" }); }
+});
+
+router.delete("/activity", async (req, res) => {
+  if (req.body?.confirmation !== "DELETE ALL WIMP ACTIVITY") return res.status(400).json({ msg: "Type DELETE ALL WIMP ACTIVITY to confirm" });
+  try {
+    const result = await clearAllWimpData(req);
+    return res.json({ msg: "All WIMP activity history deleted. WIMP balances, user accounts, and order history were kept.", data: result });
+  } catch (error) { return res.status(500).json({ msg: "Unable to delete WIMP activity" }); }
 });
 
 router.post("/adjust", async (req, res) => {

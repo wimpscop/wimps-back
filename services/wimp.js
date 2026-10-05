@@ -278,6 +278,27 @@ async function getLedger(req, userId, limit = 100) {
   return WimpLedger.find({ userId: String(userId) }).sort({ createdAt: -1 }).limit(safeLimit).lean();
 }
 
+async function clearUserWimpData(req, userId) {
+  if (isFallback(req)) {
+    const ledger = readLedger();
+    const remainingLedger = ledger.filter((entry) => String(entry.userId) !== String(userId));
+    writeLedger(remainingLedger);
+    return { entriesDeleted: ledger.length - remainingLedger.length };
+  }
+  const ledgerResult = await WimpLedger.deleteMany({ userId: String(userId) });
+  return { entriesDeleted: ledgerResult.deletedCount || 0 };
+}
+
+async function clearAllWimpData(req) {
+  if (isFallback(req)) {
+    const ledger = readLedger();
+    writeLedger([]);
+    return { entriesDeleted: ledger.length };
+  }
+  const ledgerResult = await WimpLedger.deleteMany({});
+  return { entriesDeleted: ledgerResult.deletedCount || 0 };
+}
+
 async function spendWallet(req, { userId, amountUnits, referenceId, description, idempotencyKey }) {
   if (!Number.isInteger(amountUnits) || amountUnits <= 0) throw new Error("Invalid WIMP amount");
   if (!idempotencyKey) throw new Error("Idempotency key is required");
@@ -397,6 +418,8 @@ module.exports = {
   ensureWallet,
   getWallet,
   getTokenBalance,
+  clearUserWimpData,
+  clearAllWimpData,
   purchaseToken,
   spendTokenForOrder,
   calculateDiscount,

@@ -162,6 +162,79 @@ test('admin WIMP route rejects missing admin authentication', async () => {
   }
 });
 
+test('admin can clear one user WIMP activity without changing balances or orders', async () => {
+  const userId = `wimp-clear-one-${Date.now()}`;
+  const otherUserId = `wimp-clear-other-${Date.now()}`;
+  writeUsers([{ id: userId, email: 'clear-one@example.com' }, { id: otherUserId, email: 'keep@example.com' }]);
+  writeTransactions([{ _id: 'order-clear-one', email: 'clear-one@example.com', status: 'completed' }]);
+  writeWallets([{ id: 'wallet-clear-one', userId, balanceUnits: 100, tokenBalanceUnits: 500 }, { id: 'wallet-clear-other', userId: otherUserId, balanceUnits: 200, tokenBalanceUnits: 800 }]);
+  writeLedger([
+    { id: 'ledger-clear-one', userId, type: 'earn', amountUnits: 100, balanceAfterUnits: 100 },
+    { id: 'ledger-clear-other', userId: otherUserId, type: 'earn', amountUnits: 200, balanceAfterUnits: 200 }
+  ]);
+  const previous = process.env.ADMIN_API_TOKEN;
+  process.env.ADMIN_API_TOKEN = 'wimp-admin-test-token-0123456789';
+  const app = express();
+  app.locals.dbReady = false;
+  app.use(express.json());
+  app.use('/api/admin/wimp', adminWimpRouter);
+  const server = await new Promise((resolve) => { const value = app.listen(0, '127.0.0.1', () => resolve(value)); });
+  try {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/api/admin/wimp/users/clear-one%40example.com`, {
+      method: 'DELETE',
+      headers: { 'X-Admin-Token': process.env.ADMIN_API_TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirmation: 'DELETE USER WIMP ACTIVITY' })
+    });
+    const payload = await response.json();
+    assert.equal(response.status, 200);
+    assert.deepEqual(payload.data, { entriesDeleted: 1 });
+    assert.deepEqual(readWallets(), [
+      { id: 'wallet-clear-one', userId, balanceUnits: 100, tokenBalanceUnits: 500 },
+      { id: 'wallet-clear-other', userId: otherUserId, balanceUnits: 200, tokenBalanceUnits: 800 }
+    ]);
+    assert.deepEqual(readLedger().map((entry) => entry.userId), [otherUserId]);
+    assert.equal(readUsers().length, 2);
+    assert.equal(readTransactions().length, 1);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    if (previous === undefined) delete process.env.ADMIN_API_TOKEN;
+    else process.env.ADMIN_API_TOKEN = previous;
+  }
+});
+
+test('admin can clear all WIMP activity only with the required confirmation', async () => {
+  const userId = `wimp-clear-all-${Date.now()}`;
+  writeUsers([{ id: userId, email: 'clear-all@example.com' }]);
+  writeTransactions([{ _id: 'order-clear-all', email: 'clear-all@example.com', status: 'completed' }]);
+  writeWallets([{ id: 'wallet-clear-all', userId, balanceUnits: 100, tokenBalanceUnits: 500 }]);
+  writeLedger([{ id: 'ledger-clear-all', userId, type: 'earn', amountUnits: 100, balanceAfterUnits: 100 }]);
+  const previous = process.env.ADMIN_API_TOKEN;
+  process.env.ADMIN_API_TOKEN = 'wimp-admin-test-token-0123456789';
+  const app = express();
+  app.locals.dbReady = false;
+  app.use(express.json());
+  app.use('/api/admin/wimp', adminWimpRouter);
+  const server = await new Promise((resolve) => { const value = app.listen(0, '127.0.0.1', () => resolve(value)); });
+  try {
+    const url = `http://127.0.0.1:${server.address().port}/api/admin/wimp/activity`;
+    const headers = { 'X-Admin-Token': process.env.ADMIN_API_TOKEN, 'Content-Type': 'application/json' };
+    assert.equal((await fetch(url, { method: 'DELETE', headers, body: JSON.stringify({ confirmation: 'DELETE ALL' }) })).status, 400);
+    assert.equal(readWallets().length, 1);
+    const response = await fetch(url, { method: 'DELETE', headers, body: JSON.stringify({ confirmation: 'DELETE ALL WIMP ACTIVITY' }) });
+    const payload = await response.json();
+    assert.equal(response.status, 200);
+    assert.deepEqual(payload.data, { entriesDeleted: 1 });
+    assert.deepEqual(readWallets(), [{ id: 'wallet-clear-all', userId, balanceUnits: 100, tokenBalanceUnits: 500 }]);
+    assert.equal(readLedger().length, 0);
+    assert.equal(readUsers().length, 1);
+    assert.equal(readTransactions().length, 1);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    if (previous === undefined) delete process.env.ADMIN_API_TOKEN;
+    else process.env.ADMIN_API_TOKEN = previous;
+  }
+});
+
 test('admin completion awards WIMP exactly once', async () => {
   const userId = `wimp-complete-${Date.now()}`;
   writeUsers([{ id: userId, email: 'complete@example.com', fullname: 'Complete Test' }]);
