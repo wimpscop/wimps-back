@@ -3,15 +3,22 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const express = require('express');
+const resendService = require('../services/resend');
+const resetEmails = [];
+const originalResetEmailSender = resendService.sendPasswordResetEmail;
+resendService.sendPasswordResetEmail = async (message) => resetEmails.push(message);
+const authRouter = require('../routes/auth');
+resendService.sendPasswordResetEmail = originalResetEmailSender;
 const wimpRouter = require('../routes/wimp');
 const adminWimpRouter = require('../routes/adminWimp');
 const { ensureWallet, getWallet, awardCompletedPurchase, getLedger, spendWallet, adjustWallet } = require('../services/wimp');
 const { readWallets, writeWallets, readLedger, writeLedger, readSettings, writeSettings } = require('../utils/wimpStore');
 const { runAutoCompleteSweep } = require('../services/autoComplete');
 const { readUsers, writeUsers, readTransactions, writeTransactions } = require('../utils/localStore');
+const { writeData } = require('../utils/fileDb');
 
 const dataDir = path.join(__dirname, '..', 'data');
-const files = ['wimp-wallets.json', 'wimp-ledger.json', 'wimp-settings.json', 'users.json', 'transactions.json'];
+const files = ['wimp-wallets.json', 'wimp-ledger.json', 'wimp-settings.json', 'users.json', 'transactions.json', 'admin-settings.json'];
 const originals = Object.fromEntries(files.map((name) => {
   const file = path.join(dataDir, name);
   return [name, fs.existsSync(file) ? fs.readFileSync(file) : null];
@@ -31,6 +38,99 @@ function restoreFiles() {
 }
 
 test.afterEach(restoreFiles);
+
+test('registration with a referral code credits the referrer once', async () => {
+  const referrerId = `referrer-${Date.now()}`;
+  writeUsers([{ id: referrerId, email: 'referrer@example.test', password: 'old-password', balance: 0, referralCode: 'WIMPS-REFERRER', referralCount: 0, referralCredits: 0 }]);
+  writeData('admin-settings.json', [{ key: 'referralReward', value: 0.25 }]);
+  const previousAuthSecret = process.env.AUTH_TOKEN_SECRET;
+  process.env.AUTH_TOKEN_SECRET = 'wimp-auth-test-secret-with-more-than-32-characters';
+  const app = express();
+  app.locals.dbReady = false;
+  app.use(express.json());
+  app.use('/api/auth', authRouter);
+  const server = await new Promise((resolve) => { const value = app.listen(0, '127.0.0.1', () => resolve(value)); });
+  try {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fullname: 'Referred Customer', email: 'new-customer@example.test', password: 'new-password', referralCode: 'wimps-referrer' })
+    });
+    const payload = await response.json();
+    assert.equal(response.status, 200);
+    assert.ok(payload.user.authToken);
+    const users = readUsers();
+    const referrer = users.find((user) => user.id === referrerId);
+    const referred = users.find((user) => user.email === 'new-customer@example.test');
+    assert.equal(referrer.referralCount, 1);
+    assert.equal(referrer.referralCredits, 0.25);
+    assert.equal(referrer.balance, 0.25);
+    assert.equal(referred.referredBy, 'WIMPS-REFERRER');
+    assert.equal(referred.referralCredits, 0);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    if (previousAuthSecret === undefined) delete process.env.AUTH_TOKEN_SECRET;
+    else process.env.AUTH_TOKEN_SECRET = previousAuthSecret;
+  }
+});
+
+test('password reset emails a usable one-time token and accepts the new password', async () => {
+  const email = 'password-reset@example.test';
+  writeUsers([{ id: `password-reset-${Date.now()}`, email, password: 'old-password', balance: 0, referralCode: 'WIMPS-RESET' }]);
+  resetEmails.length = 0;
+  const previousFrontendUrl = process.env.FRONTEND_URL;
+  const previousAuthSecret = process.env.AUTH_TOKEN_SECRET;
+  process.env.FRONTEND_URL = 'https://wimps.store';
+  process.env.AUTH_TOKEN_SECRET = 'wimp-auth-test-secret-with-more-than-32-characters';
+  const app = express();
+  app.locals.dbReady = false;
+  app.use(express.json());
+  app.use('/api/auth', authRouter);
+  const server = await new Promise((resolve) => { const value = app.listen(0, '127.0.0.1', () => resolve(value)); });
+  try {
+    const baseUrl = `http://127.0.0.1:${server.address().port}/api/auth`;
+    const forgotResponse = await fetch(`${baseUrl}/forgot-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email })
+    });
+    assert.equal(forgotResponse.status, 200);
+    assert.equal(resetEmails.length, 1);
+    const resetUrl = new URL(resetEmails[0].resetUrl);
+    assert.equal(resetUrl.origin, 'https://wimps.store');
+    assert.equal(resetUrl.searchParams.get('email'), email);
+    const token = resetUrl.searchParams.get('reset');
+    assert.ok(token);
+
+    const resetResponse = await fetch(`${baseUrl}/reset-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, token, password: 'replacement-password' })
+    });
+    assert.equal(resetResponse.status, 200);
+
+    const loginResponse = await fetch(`${baseUrl}/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password: 'replacement-password' })
+    });
+    assert.equal(loginResponse.status, 200);
+    assert.ok((await loginResponse.json()).user.authToken);
+
+    const replayResponse = await fetch(`${baseUrl}/reset-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, token, password: 'another-password' })
+    });
+    assert.equal(replayResponse.status, 400);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    if (previousFrontendUrl === undefined) delete process.env.FRONTEND_URL;
+    else process.env.FRONTEND_URL = previousFrontendUrl;
+    if (previousAuthSecret === undefined) delete process.env.AUTH_TOKEN_SECRET;
+    else process.env.AUTH_TOKEN_SECRET = previousAuthSecret;
+  }
+});
 
 test('creates a zero-balance wallet and awards a completed purchase once', async () => {
   const req = fallbackRequest();
