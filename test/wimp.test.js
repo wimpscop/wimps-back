@@ -3,6 +3,13 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const express = require('express');
+const axios = require('axios');
+const User = require('../models/user');
+const Transaction = require('../models/Transaction');
+const WimpSetting = require('../models/WimpSetting');
+const resellerXpress = require('../services/resellerxpress');
+const walletRouter = require('../routes/wallet');
+const { createAuthToken } = require('../utils/auth');
 const resendService = require('../services/resend');
 const resetEmails = [];
 const originalResetEmailSender = resendService.sendPasswordResetEmail;
@@ -38,6 +45,161 @@ function restoreFiles() {
 }
 
 test.afterEach(restoreFiles);
+
+test('wallet deposit credits the verified Paystack amount and rejects another payer reference', async () => {
+  const email = 'deposit-owner@example.test';
+  const userId = `deposit-owner-${Date.now()}`;
+  const user = { _id: userId, email, balance: 0, save: async () => {} };
+  const createdTransactions = [];
+  const previousAuthSecret = process.env.AUTH_TOKEN_SECRET;
+  const previousPaystackSecret = process.env.PAYSTACK_SECRET_KEY;
+  const originalUserExists = User.exists;
+  const originalUserFindOne = User.findOne;
+  const originalTransactionFindOne = Transaction.findOne;
+  const originalTransactionCreate = Transaction.create;
+  const originalAxiosGet = axios.get;
+  process.env.AUTH_TOKEN_SECRET = 'wimp-deposit-test-secret-with-more-than-32-characters';
+  process.env.PAYSTACK_SECRET_KEY = 'test-paystack-secret';
+  let payerEmail = email;
+
+  User.exists = async () => true;
+  User.findOne = async () => user;
+  Transaction.findOne = async ({ reference }) => createdTransactions.find((item) => item.reference === reference) || null;
+  Transaction.create = async (entry) => {
+    const transaction = { ...entry, _id: `deposit-${createdTransactions.length + 1}` };
+    createdTransactions.push(transaction);
+    return transaction;
+  };
+  axios.get = async () => ({ data: { status: true, data: { status: 'success', amount: 1025, currency: 'GHS', customer: { email: payerEmail } } } });
+
+  const app = express();
+  app.locals.dbReady = true;
+  app.use(express.json());
+  app.use('/api/wallet', walletRouter);
+  const server = await new Promise((resolve) => { const value = app.listen(0, '127.0.0.1', () => resolve(value)); });
+  try {
+    const token = createAuthToken({ _id: userId, email });
+    const url = `http://127.0.0.1:${server.address().port}/api/wallet/deposit`;
+    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+    const response = await fetch(url, { method: 'POST', headers, body: JSON.stringify({ amount: 10, reference: 'deposit-rounding-reference' }) });
+    const payload = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(payload.creditedAmount, 10.25);
+    assert.equal(payload.balance, 10.25);
+    assert.equal(createdTransactions.length, 1);
+    assert.equal(createdTransactions[0].amount, 10.25);
+
+    const duplicate = await fetch(url, { method: 'POST', headers, body: JSON.stringify({ amount: 10, reference: 'deposit-rounding-reference' }) });
+    const duplicatePayload = await duplicate.json();
+    assert.equal(duplicate.status, 200);
+    assert.equal(duplicatePayload.balance, 10.25);
+    assert.equal(createdTransactions.length, 1);
+
+    payerEmail = 'somebody-else@example.test';
+    const otherPayer = await fetch(url, { method: 'POST', headers, body: JSON.stringify({ amount: 10, reference: 'other-payer-reference' }) });
+    assert.equal(otherPayer.status, 403);
+    assert.equal(user.balance, 10.25);
+    assert.equal(createdTransactions.length, 1);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    User.exists = originalUserExists;
+    User.findOne = originalUserFindOne;
+    Transaction.findOne = originalTransactionFindOne;
+    Transaction.create = originalTransactionCreate;
+    axios.get = originalAxiosGet;
+    if (previousAuthSecret === undefined) delete process.env.AUTH_TOKEN_SECRET;
+    else process.env.AUTH_TOKEN_SECRET = previousAuthSecret;
+    if (previousPaystackSecret === undefined) delete process.env.PAYSTACK_SECRET_KEY;
+    else process.env.PAYSTACK_SECRET_KEY = previousPaystackSecret;
+  }
+});
+
+test('uncertain provider timeout keeps a verified Paystack purchase pending without refund or retry', async () => {
+  const previousAuthSecret = process.env.AUTH_TOKEN_SECRET;
+  const previousPaystackSecret = process.env.PAYSTACK_SECRET_KEY;
+  const originalUserExists = User.exists;
+  const originalUserFindOne = User.findOne;
+  const originalTransactionFindOne = Transaction.findOne;
+  const originalTransactionCreate = Transaction.create;
+  const originalWimpSettingFind = WimpSetting.find;
+  const originalAxiosGet = axios.get;
+  const originalAxiosPost = axios.post;
+  const originalGetPlans = resellerXpress.getPlans;
+  const originalPlaceProviderOrder = resellerXpress.placeProviderOrder;
+  process.env.AUTH_TOKEN_SECRET = 'wimp-payment-test-secret-with-more-than-32-characters';
+  process.env.PAYSTACK_SECRET_KEY = 'test-paystack-secret';
+
+  const email = 'pending-provider@example.test';
+  const userId = `pending-provider-${Date.now()}`;
+  const user = { _id: userId, email, balance: 0, referralCredits: 0, save: async () => {} };
+  let providerAttempts = 0;
+  let alternativePlanLookups = 0;
+  let refundAttempts = 0;
+  let createdTransaction;
+
+  User.exists = async () => true;
+  User.findOne = async () => user;
+  Transaction.findOne = async () => null;
+  Transaction.create = async (entry) => {
+    createdTransaction = { ...entry, _id: `transaction-${userId}`, save: async () => {} };
+    return createdTransaction;
+  };
+  WimpSetting.find = () => ({ lean: async () => [] });
+  axios.get = async () => ({ data: { status: true, data: { status: 'success', amount: 3500, currency: 'GHS' } } });
+  axios.post = async () => { refundAttempts += 1; return { data: { status: true } }; };
+  resellerXpress.getPlans = async (_network, options = {}) => {
+    if (options.allProviders) alternativePlanLookups += 1;
+    return [{ id: '12345', provider: 'resellerxpress', network: 'mtn', volumeGb: 5, price: 30, cost: 30, sellingPrice: 35, fee: 5, available: true, purchasable: true }];
+  };
+  resellerXpress.placeProviderOrder = async () => {
+    providerAttempts += 1;
+    const error = new Error('socket timed out after provider accepted request');
+    error.code = 'ECONNABORTED';
+    throw error;
+  };
+
+  const routePath = require.resolve('../routes/wallet');
+  delete require.cache[routePath];
+  const walletRouter = require('../routes/wallet');
+  const app = express();
+  app.locals.dbReady = true;
+  app.use(express.json());
+  app.use('/api/wallet', walletRouter);
+  const server = await new Promise((resolve) => { const value = app.listen(0, '127.0.0.1', () => resolve(value)); });
+
+  try {
+    const token = createAuthToken({ _id: userId, email });
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/api/wallet/buy`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, phone: '0241234567', network: 'mtn', plan_id: '12345', quantity: 1, amount: 35, wimpUnits: 0, reference: 'T-UNCERTAIN-PROVIDER' })
+    });
+    const payload = await response.json();
+    assert.equal(response.status, 202);
+    assert.equal(payload.data.status, 'pending');
+    assert.match(payload.msg, /do not pay again/i);
+    assert.equal(createdTransaction.status, 'pending');
+    assert.equal(providerAttempts, 1);
+    assert.equal(alternativePlanLookups, 0);
+    assert.equal(refundAttempts, 0);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    delete require.cache[routePath];
+    User.exists = originalUserExists;
+    User.findOne = originalUserFindOne;
+    Transaction.findOne = originalTransactionFindOne;
+    Transaction.create = originalTransactionCreate;
+    WimpSetting.find = originalWimpSettingFind;
+    axios.get = originalAxiosGet;
+    axios.post = originalAxiosPost;
+    resellerXpress.getPlans = originalGetPlans;
+    resellerXpress.placeProviderOrder = originalPlaceProviderOrder;
+    if (previousAuthSecret === undefined) delete process.env.AUTH_TOKEN_SECRET;
+    else process.env.AUTH_TOKEN_SECRET = previousAuthSecret;
+    if (previousPaystackSecret === undefined) delete process.env.PAYSTACK_SECRET_KEY;
+    else process.env.PAYSTACK_SECRET_KEY = previousPaystackSecret;
+  }
+});
 
 test('registration with a referral code credits the referrer once', async () => {
   const referrerId = `referrer-${Date.now()}`;

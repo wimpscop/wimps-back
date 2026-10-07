@@ -40,6 +40,18 @@ function isConfigured() {
   return Boolean(getApiKey());
 }
 
+function isDefinitiveProviderFailure(error) {
+  if (error?.definitiveProviderFailure === true) return true;
+  const status = Number(error?.status || error?.response?.status || 0);
+  return [400, 401, 403, 404, 422].includes(status);
+}
+
+function definitiveProviderError(message) {
+  const error = new Error(message);
+  error.definitiveProviderFailure = true;
+  return error;
+}
+
 function getHeaders() {
   return {
     "X-API-KEY": getApiKey(),
@@ -412,7 +424,7 @@ async function placeProviderOrder(provider, input = {}) {
   }
 
   if (!Number.isFinite(volumeGb) || volumeGb <= 0) {
-    throw new Error("A valid bundle volume is required for this provider");
+    throw definitiveProviderError("A valid bundle volume is required for this provider");
   }
 
   const providerInput = {
@@ -431,7 +443,7 @@ async function placeProviderOrder(provider, input = {}) {
     requestId: input.request_id
   });
 
-  throw new Error(`Unsupported provider: ${provider}`);
+  throw definitiveProviderError(`Unsupported provider: ${provider}`);
 }
 
 async function placeOrder(input = {}) {
@@ -441,15 +453,15 @@ async function placeOrder(input = {}) {
   const requestId = input.request_id ?? input.requestId ?? `WIMPS_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
   if (!isConfigured()) {
-    throw new Error("ResellerXpress provider is not configured");
+    throw definitiveProviderError("ResellerXpress provider is not configured");
   }
 
   if (!planId) {
-    throw new Error("A valid plan_id is required for ResellerXpress orders");
+    throw definitiveProviderError("A valid plan_id is required for ResellerXpress orders");
   }
 
   if (!phone) {
-    throw new Error("A recipient phone number is required for ResellerXpress orders");
+    throw definitiveProviderError("A recipient phone number is required for ResellerXpress orders");
   }
 
   const payload = {
@@ -466,7 +478,11 @@ async function placeOrder(input = {}) {
 
     return response.data;
   } catch (error) {
-    throw new Error(error.response?.data?.message || error.message || "ResellerXpress order failed");
+    const providerError = new Error(error.response?.data?.message || error.message || "ResellerXpress order failed");
+    providerError.status = error.response?.status;
+    providerError.code = error.code;
+    providerError.definitiveProviderFailure = isDefinitiveProviderFailure(error);
+    throw providerError;
   }
 }
 
@@ -565,6 +581,7 @@ async function setWebhook(url, enabled, events) {
 
 module.exports = {
   isConfigured,
+  isDefinitiveProviderFailure,
   getFallbackPlans,
   getPlans,
   placeOrder,

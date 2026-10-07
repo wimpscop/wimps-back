@@ -4,7 +4,7 @@ const axios = require("axios");
 
 const User = require("../models/user");
 const Transaction = require("../models/Transaction");
-const { placeProviderOrder, getPlans, getFallbackPlans } = require("../services/resellerxpress");
+const { placeProviderOrder, getPlans, getFallbackPlans, isDefinitiveProviderFailure } = require("../services/resellerxpress");
 const { createId, isFallback, readUsers, writeUsers, readTransactions, writeTransactions } = require("../utils/localStore");
 const { requireUser } = require("../utils/auth");
 const { normalizePhone, validatePhone } = require("../utils/phoneValidation");
@@ -66,23 +66,6 @@ async function refundPaystackReference(reference) {
   }
 }
 
-function validatePayment(paymentData, expectedAmount, maximumAmount = expectedAmount) {
-  const expected = Number(expectedAmount);
-  const maximum = Number(maximumAmount);
-  const paidAmount = Number(paymentData?.amount || 0) / 100;
-  const currency = String(paymentData?.currency || "").toUpperCase();
-
-  if (!Number.isFinite(expected) || expected <= 0) return "Invalid expected payment amount";
-  if (!Number.isFinite(paidAmount) || paidAmount <= 0) return "Invalid payment amount";
-  if (currency && currency !== "GHS") return "Payment currency mismatch";
-
-  const expectedCents = Math.round(expected * 100);
-  const paidCents = Math.round(paidAmount * 100);
-  const maximumCents = Math.round(maximum * 100);
-  if (paidCents < expectedCents - 1 || paidCents > maximumCents + 1) return "Amount mismatch";
-  return null;
-}
-
 function getVerifiedPaymentAmount(paymentData) {
   const paidAmount = Number(paymentData?.amount || 0) / 100;
   const currency = String(paymentData?.currency || "").toUpperCase();
@@ -133,27 +116,27 @@ router.get("/:email", async (req, res) => {
 // ==========================
 router.post("/deposit", async (req, res) => {
   try {
-    const { amount, reference } = req.body;
+    const { reference } = req.body;
     const email = req.user.email;
 
-    console.log("DEPOSIT REQUEST:", req.body);
-
-    if (!email || !amount || !reference) {
+    if (!email || !reference) {
       return res.status(400).json({ msg: "Missing fields" });
     }
 
     const verification = await verifyPaystackReference(reference);
-
-    console.log("PAYSTACK RESPONSE:", verification);
 
     if (!verification.verified) {
       return res.status(400).json({ msg: verification.msg || "Payment not verified" });
     }
 
     const paymentData = verification.paymentData;
-
-    const paymentError = validatePayment(paymentData, amount);
-    if (paymentError) return res.status(400).json({ msg: paymentError });
+    const payerEmail = String(paymentData.customer?.email || paymentData.customer_email || "").trim().toLowerCase();
+    if (!payerEmail || payerEmail !== String(email).trim().toLowerCase()) {
+      return res.status(403).json({ msg: "This Paystack payment does not belong to your account" });
+    }
+    const verifiedAmount = getVerifiedPaymentAmount(paymentData);
+    if (verifiedAmount.error) return res.status(400).json({ msg: verifiedAmount.error });
+    const paidAmount = verifiedAmount.amount;
 
     if (isFallback(req)) {
       const users = readUsers();
@@ -162,9 +145,13 @@ router.post("/deposit", async (req, res) => {
 
       const transactions = readTransactions();
       const existing = transactions.find((item) => item.reference === reference);
-      if (existing) return res.json({ msg: "Deposit already processed", balance: user.balance || 0 });
+      if (existing) {
+        if (String(existing.email).toLowerCase() === String(email).toLowerCase() && existing.type === "deposit" && existing.status === "completed") {
+          return res.json({ msg: "Deposit already processed", balance: user.balance || 0, creditedAmount: Number(existing.amount || 0) });
+        }
+        return res.status(409).json({ msg: "Payment reference already used" });
+      }
 
-      const paidAmount = Number(paymentData.amount) / 100;
       user.balance = Number(user.balance || 0) + paidAmount;
       transactions.push({
         _id: createId(), email, type: "deposit", amount: paidAmount,
@@ -172,7 +159,7 @@ router.post("/deposit", async (req, res) => {
       });
       writeUsers(users);
       writeTransactions(transactions);
-      return res.json({ msg: "Deposit successful", balance: user.balance });
+      return res.json({ msg: "Deposit successful", balance: user.balance, creditedAmount: paidAmount });
     }
 
     // ✅ PREVENT DOUBLE CREDIT
@@ -180,7 +167,7 @@ router.post("/deposit", async (req, res) => {
     if (existing) {
       if (existing.email === email && existing.type === "deposit" && existing.status === "completed") {
         const currentUser = await User.findOne({ email });
-        return res.json({ msg: "Deposit already processed", balance: currentUser?.balance || 0 });
+        return res.json({ msg: "Deposit already processed", balance: currentUser?.balance || 0, creditedAmount: Number(existing.amount || 0) });
       }
       return res.status(409).json({ msg: "Payment reference already used" });
     }
@@ -192,8 +179,6 @@ router.post("/deposit", async (req, res) => {
     }
 
     // ✅ CONVERT KOBO → GHS
-    const paidAmount = Number(paymentData.amount) / 100;
-
     // ✅ CREDIT WALLET
     user.balance += paidAmount;
     await user.save();
@@ -212,7 +197,8 @@ router.post("/deposit", async (req, res) => {
 
     res.json({
       msg: "Deposit successful",
-      balance: user.balance
+      balance: user.balance,
+      creditedAmount: paidAmount
     });
 
   } catch (err) {
@@ -421,11 +407,13 @@ router.post("/buy", async (req, res) => {
         providerRequestId: requestId
       });
 
+      let providerOutcomeUnknown = false;
       try {
         if (wimpDiscountUnits > 0) await spendWallet(req, { userId: String(user._id), amountUnits: wimpDiscountUnits, referenceId: String(reference || requestId), description: `WIMP discount for ${bundle || formatBundleLabel(plan)}`, idempotencyKey: `wimp-spend:${reference || requestId}` });
         let providerPlan = plan;
         let result;
         try {
+          providerOutcomeUnknown = true;
           result = await placeProviderOrder(providerPlan.provider, {
             plan_id: providerPlan.id,
             phone,
@@ -436,7 +424,10 @@ router.post("/buy", async (req, res) => {
             request_id: requestId,
             quantity
           });
+          providerOutcomeUnknown = false;
         } catch (firstProviderError) {
+          if (!isDefinitiveProviderFailure(firstProviderError)) throw firstProviderError;
+          providerOutcomeUnknown = false;
           const alternatives = await getPlans(providerPlan.network, { allProviders: true, ignoreProviderSelection: true });
           const targetVolume = Number(providerPlan.volumeGb);
           const alternative = alternatives.find((candidate) => candidate.provider !== providerPlan.provider
@@ -447,16 +438,6 @@ router.post("/buy", async (req, res) => {
           if (!alternative) throw firstProviderError;
 
           providerPlan = alternative;
-          result = await placeProviderOrder(providerPlan.provider, {
-            plan_id: providerPlan.id,
-            phone,
-            network: providerPlan.network,
-            volumeGb: providerPlan.volumeGb || providerPlan.volume,
-            operatorId: providerPlan.operatorId,
-            providerAmount: providerPlan.price || providerPlan.cost || providerPlan.total,
-            request_id: requestId,
-            quantity
-          });
           tx.providerCost = Number(providerPlan.price || providerPlan.cost || providerPlan.total || providerCost);
           tx.providerFee = Number(providerPlan.fee || providerFee);
           tx.smsFee = Number(providerPlan.smsFee || smsFee);
@@ -464,6 +445,23 @@ router.post("/buy", async (req, res) => {
           tx.network = providerPlan.network;
           tx.provider = providerPlan.provider;
           tx.bundle = bundle || providerPlan.name || `${quantity} bundle(s)`;
+          providerOutcomeUnknown = true;
+          try {
+            result = await placeProviderOrder(providerPlan.provider, {
+              plan_id: providerPlan.id,
+              phone,
+              network: providerPlan.network,
+              volumeGb: providerPlan.volumeGb || providerPlan.volume,
+              operatorId: providerPlan.operatorId,
+              providerAmount: providerPlan.price || providerPlan.cost || providerPlan.total,
+              request_id: requestId,
+              quantity
+            });
+            providerOutcomeUnknown = false;
+          } catch (alternativeError) {
+            providerOutcomeUnknown = !isDefinitiveProviderFailure(alternativeError);
+            throw alternativeError;
+          }
         }
 
         const providerStatus = String(
@@ -540,6 +538,16 @@ router.post("/buy", async (req, res) => {
         });
       } catch (apiErr) {
         console.error("RESELLERXPRESS ERROR:", apiErr.response?.data || apiErr.message);
+
+        if (providerOutcomeUnknown) {
+          tx.status = "pending";
+          tx.actualProfit = 0;
+          await tx.save();
+          return res.status(202).json({
+            msg: "Payment received, but provider confirmation is delayed. Your order remains pending; do not pay again while we verify delivery.",
+            data: tx
+          });
+        }
 
         tx.status = reference ? "refunded" : "failed";
         tx.actualProfit = 0;
