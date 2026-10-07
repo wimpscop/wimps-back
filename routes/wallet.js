@@ -74,6 +74,25 @@ function getVerifiedPaymentAmount(paymentData) {
   return { amount: Number(paidAmount.toFixed(2)) };
 }
 
+function getVerifiedDepositCredit(paymentData, requestedAmount) {
+  const verifiedAmount = getVerifiedPaymentAmount(paymentData);
+  if (verifiedAmount.error) return verifiedAmount;
+
+  const amount = Number(requestedAmount);
+  const paymentFee = Number((Number(paymentData?.fees || 0) / 100).toFixed(2));
+  if (!Number.isFinite(amount) || amount < 10 || !Number.isFinite(paymentFee) || paymentFee < 0) {
+    return { error: "Invalid deposit amount" };
+  }
+
+  const creditedAmount = Number(amount.toFixed(2));
+  const excess = Number((verifiedAmount.amount - creditedAmount).toFixed(2));
+  if (excess < 0 || excess > paymentFee + 0.01) {
+    return { error: "Verified payment amount does not match the requested deposit" };
+  }
+
+  return { amount: creditedAmount, paymentFee };
+}
+
 function formatBundleLabel(plan) {
   const volumeGb = Number(plan?.volumeGb);
   if (!Number.isFinite(volumeGb) || volumeGb <= 0) return plan?.name || "Data bundle";
@@ -116,10 +135,10 @@ router.get("/:email", async (req, res) => {
 // ==========================
 router.post("/deposit", async (req, res) => {
   try {
-    const { reference } = req.body;
+    const { amount: requestedAmount, reference } = req.body;
     const email = req.user.email;
 
-    if (!email || !reference) {
+    if (!email || !reference || requestedAmount === undefined) {
       return res.status(400).json({ msg: "Missing fields" });
     }
 
@@ -134,9 +153,9 @@ router.post("/deposit", async (req, res) => {
     if (!payerEmail || payerEmail !== String(email).trim().toLowerCase()) {
       return res.status(403).json({ msg: "This Paystack payment does not belong to your account" });
     }
-    const verifiedAmount = getVerifiedPaymentAmount(paymentData);
-    if (verifiedAmount.error) return res.status(400).json({ msg: verifiedAmount.error });
-    const paidAmount = verifiedAmount.amount;
+    const depositCredit = getVerifiedDepositCredit(paymentData, requestedAmount);
+    if (depositCredit.error) return res.status(400).json({ msg: depositCredit.error });
+    const creditedAmount = depositCredit.amount;
 
     if (isFallback(req)) {
       const users = readUsers();
@@ -152,14 +171,14 @@ router.post("/deposit", async (req, res) => {
         return res.status(409).json({ msg: "Payment reference already used" });
       }
 
-      user.balance = Number(user.balance || 0) + paidAmount;
+      user.balance = Number(user.balance || 0) + creditedAmount;
       transactions.push({
-        _id: createId(), email, type: "deposit", amount: paidAmount,
+        _id: createId(), email, type: "deposit", amount: creditedAmount, paymentFee: depositCredit.paymentFee,
         paymentMethod: "paystack", reference, status: "completed", date: new Date().toISOString(), deliveredAt: new Date().toISOString()
       });
       writeUsers(users);
       writeTransactions(transactions);
-      return res.json({ msg: "Deposit successful", balance: user.balance, creditedAmount: paidAmount });
+      return res.json({ msg: "Deposit successful", balance: user.balance, creditedAmount });
     }
 
     // ✅ PREVENT DOUBLE CREDIT
@@ -180,14 +199,15 @@ router.post("/deposit", async (req, res) => {
 
     // ✅ CONVERT KOBO → GHS
     // ✅ CREDIT WALLET
-    user.balance += paidAmount;
+    user.balance += creditedAmount;
     await user.save();
 
     // ✅ SAVE TRANSACTION
     await Transaction.create({
       email,
       type: "deposit",
-      amount: paidAmount,
+      amount: creditedAmount,
+      paymentFee: depositCredit.paymentFee,
       paymentMethod: "paystack",
       reference,
       status: "completed",
@@ -198,7 +218,7 @@ router.post("/deposit", async (req, res) => {
     res.json({
       msg: "Deposit successful",
       balance: user.balance,
-      creditedAmount: paidAmount
+      creditedAmount
     });
 
   } catch (err) {

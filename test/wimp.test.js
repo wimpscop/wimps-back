@@ -46,7 +46,7 @@ function restoreFiles() {
 
 test.afterEach(restoreFiles);
 
-test('wallet deposit credits the verified Paystack amount and rejects another payer reference', async () => {
+test('wallet deposit credits the requested amount and records Paystack fees', async () => {
   const email = 'deposit-owner@example.test';
   const userId = `deposit-owner-${Date.now()}`;
   const user = { _id: userId, email, balance: 0, save: async () => {} };
@@ -70,7 +70,7 @@ test('wallet deposit credits the verified Paystack amount and rejects another pa
     createdTransactions.push(transaction);
     return transaction;
   };
-  axios.get = async () => ({ data: { status: true, data: { status: 'success', amount: 1025, currency: 'GHS', customer: { email: payerEmail } } } });
+  axios.get = async () => ({ data: { status: true, data: { status: 'success', amount: 1020, fees: 20, currency: 'GHS', customer: { email: payerEmail } } } });
 
   const app = express();
   app.locals.dbReady = true;
@@ -84,21 +84,22 @@ test('wallet deposit credits the verified Paystack amount and rejects another pa
     const response = await fetch(url, { method: 'POST', headers, body: JSON.stringify({ amount: 10, reference: 'deposit-rounding-reference' }) });
     const payload = await response.json();
     assert.equal(response.status, 200);
-    assert.equal(payload.creditedAmount, 10.25);
-    assert.equal(payload.balance, 10.25);
+    assert.equal(payload.creditedAmount, 10);
+    assert.equal(payload.balance, 10);
     assert.equal(createdTransactions.length, 1);
-    assert.equal(createdTransactions[0].amount, 10.25);
+    assert.equal(createdTransactions[0].amount, 10);
+    assert.equal(createdTransactions[0].paymentFee, 0.2);
 
     const duplicate = await fetch(url, { method: 'POST', headers, body: JSON.stringify({ amount: 10, reference: 'deposit-rounding-reference' }) });
     const duplicatePayload = await duplicate.json();
     assert.equal(duplicate.status, 200);
-    assert.equal(duplicatePayload.balance, 10.25);
+    assert.equal(duplicatePayload.balance, 10);
     assert.equal(createdTransactions.length, 1);
 
     payerEmail = 'somebody-else@example.test';
     const otherPayer = await fetch(url, { method: 'POST', headers, body: JSON.stringify({ amount: 10, reference: 'other-payer-reference' }) });
     assert.equal(otherPayer.status, 403);
-    assert.equal(user.balance, 10.25);
+    assert.equal(user.balance, 10);
     assert.equal(createdTransactions.length, 1);
   } finally {
     await new Promise((resolve) => server.close(resolve));
